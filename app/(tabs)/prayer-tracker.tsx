@@ -1,0 +1,1145 @@
+
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  ScrollView,
+  Alert,
+  Dimensions,
+  TextInput,
+  Animated,
+  Platform,
+  KeyboardAvoidingView,
+  ActivityIndicator,
+  StatusBar,
+  useWindowDimensions,
+} from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { BlurView } from 'expo-blur';
+import {
+  Plus,
+  Trash2,
+  Heart,
+  CircleCheck as CheckCircle,
+  Clock,
+  Search,
+  Filter,
+  X,
+  ChevronRight,
+  Sparkles,
+  Target,
+  TrendingUp,
+  Calendar,
+  Bell,
+  Star,
+  ArrowLeft,
+  Award,
+  Flame,
+  BarChart3,
+  Mic,
+  Users,
+  BookOpen,
+  Lightbulb,
+  Zap,
+  Share2,
+  Download,
+  Settings,
+  Moon,
+  Sun,
+  Camera,
+  MapPin,
+  Timer,
+  Coffee,
+  Music,
+} from 'lucide-react-native';
+import { supabase, createFirebaseSupabaseClient } from '@/lib/supabase';
+import { Colors, Typography, Spacing, BorderRadius, Shadows } from '@/constants/DesignTokens';
+import { useAuth } from '@/hooks/useAuth';
+import BackgroundGradient from '../../components/BackgroundGradient';
+import { router } from 'expo-router';
+
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+
+interface Prayer {
+  id: string;
+  title: string;
+  description?: string;
+  category: string;
+  priority: string;
+  status: 'active' | 'answered' | 'paused';
+  created_at: string;
+  answered_at?: string;
+  prayer_count?: number;
+  last_prayed_at?: string;
+  mood?: string;
+  location?: string;
+  voice_note?: string;
+  images?: string[];
+  tags?: string[];
+  is_shared?: boolean;
+  reminder_time?: string;
+  frequency?: string;
+}
+
+const categories = [
+  { id: 'personal', label: 'Personal', icon: '🙏', color: Colors.primary[500] },
+  { id: 'family', label: 'Family', icon: '👨‍👩‍👧‍👦', color: Colors.error[500] },
+  { id: 'health', label: 'Health', icon: '🏥', color: Colors.success[500] },
+  { id: 'work', label: 'Work', icon: '💼', color: Colors.warning[500] },
+  { id: 'financial', label: 'Financial', icon: '💰', color: Colors.secondary[500] },
+  { id: 'spiritual', label: 'Spiritual', icon: '✝️', color: Colors.primary[600] },
+  { id: 'community', label: 'Community', icon: '🏘️', color: Colors.primary[500] },
+  { id: 'gratitude', label: 'Gratitude', icon: '🙌', color: Colors.warning[500] },
+];
+
+const priorities = [
+  { id: 'low', label: 'Low', color: Colors.neutral[400], icon: '🟢' },
+  { id: 'medium', label: 'Medium', color: Colors.warning[500], icon: '🟡' },
+  { id: 'high', label: 'High', color: Colors.error[500], icon: '🟠' },
+  { id: 'urgent', label: 'Urgent', color: Colors.error[700], icon: '🔴' },
+];
+
+export default function PrayerTrackerScreen() {
+  const { user } = useAuth();
+  const [prayers, setPrayers] = useState<Prayer[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [formCategory, setFormCategory] = useState('personal');
+  const [formPriority, setFormPriority] = useState('medium');
+  const [selectedStatus, setSelectedStatus] = useState('all');
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [selectedPriority, setSelectedPriority] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const stats = useMemo(() => ({
+    total: prayers.length,
+    active: prayers.filter(p => p.status === 'active').length,
+    answered: prayers.filter(p => p.status === 'answered').length,
+    paused: prayers.filter(p => p.status === 'paused').length,
+  }), [prayers]);
+
+  useEffect(() => {
+    if (user) {
+      fetchPrayers();
+    } else {
+      setPrayers([]);
+    }
+  }, [user]);
+
+  const fetchPrayers = async () => {
+    if (!user) {
+      console.log('No authenticated user found');
+      setPrayers([]);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      console.log('Fetching prayers for user:', user.id);
+      
+      const firebaseSupabase = createFirebaseSupabaseClient(user);
+      
+      const { data, error } = await firebaseSupabase
+        .from('prayers')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching prayers:', error);
+        throw error;
+      }
+      
+      console.log('Prayers fetched successfully:', data?.length || 0, 'prayers');
+      setPrayers(data || []);
+    } catch (error: any) {
+      console.error('Error fetching prayers:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addPrayer = async () => {
+    if (!user) {
+      Alert.alert('Error', 'You need to be logged in to add prayers');
+      return;
+    }
+
+    if (!title.trim()) {
+      Alert.alert('Error', 'Please enter a prayer title');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const firebaseSupabase = createFirebaseSupabaseClient(user);
+      
+      const { data, error } = await firebaseSupabase
+        .from('prayers')
+        .insert([
+          {
+            user_id: user.id,
+            title: title.trim(),
+            description: description.trim() || null,
+            category: formCategory,
+            priority: formPriority,
+            status: 'active',
+          }
+        ])
+        .select();
+
+      if (error) {
+        console.error('Error adding prayer:', error);
+        throw error;
+      }
+
+      Alert.alert('Success', '🙏 Prayer added successfully!');
+      setTitle('');
+      setDescription('');
+      setFormCategory('personal');
+      setFormPriority('medium');
+      setShowAddForm(false);
+      fetchPrayers();
+    } catch (error: any) {
+      console.error('Error adding prayer:', error);
+      Alert.alert('Error', `Failed to add prayer: ${error.message || 'Unknown error'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updatePrayerStatus = async (id: string, status: 'active' | 'answered' | 'paused') => {
+    try {
+      const updateData: any = { status };
+      if (status === 'answered') {
+        updateData.answered_at = new Date().toISOString();
+      }
+
+      const firebaseSupabase = createFirebaseSupabaseClient(user);
+
+      const { error } = await firebaseSupabase
+        .from('prayers')
+        .update(updateData)
+        .eq('id', id);
+
+      if (error) throw error;
+      fetchPrayers();
+    } catch (error: any) {
+      Alert.alert('Error', 'Failed to update prayer status');
+    }
+  };
+
+  const deletePrayer = async (id: string) => {
+    if (!user) {
+      Alert.alert('Error', 'You need to be logged in to delete prayers');
+      return;
+    }
+
+    const prayer = prayers.find(p => p.id === id);
+    if (!prayer) {
+      Alert.alert('Error', 'Prayer not found');
+      return;
+    }
+
+    try {
+      const firebaseSupabase = createFirebaseSupabaseClient(user);
+      
+      const { error } = await firebaseSupabase
+        .from('prayers')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      
+      Alert.alert('Success', 'Prayer deleted successfully');
+      fetchPrayers();
+    } catch (error: any) {
+      console.error('Error deleting prayer:', error);
+      Alert.alert('Error', 'Failed to delete prayer');
+    }
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'answered': return <CheckCircle size={20} color="#10B981" />;
+      case 'paused': return <Clock size={20} color="#F59E0B" />;
+      default: return <Heart size={20} color="#EF4444" />;
+    }
+  };
+
+  const getCategoryColor = (categoryId: string) => {
+    return categories.find(cat => cat.id === categoryId)?.color || '#6B7280';
+  };
+
+  const getPriorityColor = (priorityId: string) => {
+    return priorities.find(pri => pri.id === priorityId)?.color || '#6B7280';
+  };
+
+  const filteredPrayers = useMemo(() => {
+    let filtered = prayers;
+
+    // Apply status filter
+    if (selectedStatus !== 'all') {
+      filtered = filtered.filter(p => p.status === selectedStatus);
+    }
+
+    // Apply category filter
+    if (selectedCategory !== 'all') {
+      filtered = filtered.filter(p => p.category === selectedCategory);
+    }
+
+    // Apply priority filter
+    if (selectedPriority !== 'all') {
+      filtered = filtered.filter(p => p.priority === selectedPriority);
+    }
+
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(p =>
+        p.title.toLowerCase().includes(query) ||
+        (p.description && p.description.toLowerCase().includes(query))
+      );
+    }
+
+    return filtered;
+  }, [prayers, selectedStatus, selectedCategory, selectedPriority, searchQuery]);
+
+  return (
+    <LinearGradient
+      colors={Colors.gradients.spiritualLight as any}
+      style={styles.container}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+    >
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.headerLeft}>
+          <Text style={styles.headerTitle}>Prayer Tracker</Text>
+          <Text style={styles.headerSubtitle}>Track your prayer requests</Text>
+        </View>
+        <View style={styles.headerRight}>
+          <TouchableOpacity 
+            style={styles.headerButton}
+            onPress={() => setShowAddForm(!showAddForm)}
+          >
+            <LinearGradient
+              colors={['#8B5CF6', '#A855F7', '#C084FC']}
+              style={styles.headerButtonGradient}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+            >
+              <Plus size={24} color="white" strokeWidth={2.5} />
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+        {/* Stats Cards */}
+        <View style={styles.statsContainer}>
+          <View style={styles.statCard}>
+            <LinearGradient
+              colors={['rgba(255, 255, 255, 0.25)', 'rgba(255, 255, 255, 0.15)']}
+              style={styles.statGradient}
+            >
+              <Text style={styles.statNumber}>{stats.total}</Text>
+              <Text style={styles.statLabel}>Total Prayers</Text>
+            </LinearGradient>
+          </View>
+          
+          <View style={styles.statCard}>
+            <LinearGradient
+              colors={['rgba(239, 68, 68, 0.25)', 'rgba(239, 68, 68, 0.15)']}
+              style={styles.statGradient}
+            >
+              <Text style={styles.statNumber}>{stats.active}</Text>
+              <Text style={styles.statLabel}>Active</Text>
+            </LinearGradient>
+          </View>
+          
+          <View style={styles.statCard}>
+            <LinearGradient
+              colors={['rgba(16, 185, 129, 0.25)', 'rgba(16, 185, 129, 0.15)']}
+              style={styles.statGradient}
+            >
+              <Text style={styles.statNumber}>{stats.answered}</Text>
+              <Text style={styles.statLabel}>Answered</Text>
+            </LinearGradient>
+          </View>
+          
+          <View style={styles.statCard}>
+            <LinearGradient
+              colors={['rgba(245, 158, 11, 0.25)', 'rgba(245, 158, 11, 0.15)']}
+              style={styles.statGradient}
+            >
+              <Text style={styles.statNumber}>{stats.paused}</Text>
+              <Text style={styles.statLabel}>Paused</Text>
+            </LinearGradient>
+          </View>
+        </View>
+
+        {/* Filters Section */}
+        <View style={styles.filtersSection}>
+          <Text style={styles.sectionTitle}>Filter Prayers</Text>
+          
+          {/* Search Bar */}
+          <View style={styles.searchContainer}>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search prayers..."
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholderTextColor="rgba(255, 255, 255, 0.7)"
+            />
+          </View>
+          
+          {/* Status Filters */}
+          <View style={styles.filterRow}>
+            <Text style={styles.filterLabel}>Status:</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
+              {[
+                { value: 'all', label: 'All', count: prayers.length },
+                { value: 'active', label: 'Active', count: prayers.filter(p => p.status === 'active').length },
+                { value: 'answered', label: 'Answered', count: prayers.filter(p => p.status === 'answered').length },
+                { value: 'paused', label: 'Paused', count: prayers.filter(p => p.status === 'paused').length },
+              ].map((filter) => (
+                <TouchableOpacity
+                  key={filter.value}
+                  style={[
+                    styles.filterOption,
+                    selectedStatus === filter.value && styles.selectedFilter
+                  ]}
+                  onPress={() => setSelectedStatus(filter.value as any)}
+                >
+
+                  <Text style={[
+                    styles.filterOptionText,
+                    selectedStatus === filter.value && styles.selectedFilterText
+                  ]}>
+                    {filter.label} ({filter.count})
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+          
+          {/* Category Filters */}
+          <View style={styles.filterRow}>
+            <Text style={styles.filterLabel}>Category:</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
+              {[
+                { value: 'all', label: 'All', count: prayers.length },
+                ...categories.map(cat => ({
+                  value: cat.id,
+                  label: cat.label,
+                  count: prayers.filter(p => p.category === cat.id).length
+                }))
+              ].map((filter) => (
+                <TouchableOpacity
+                  key={filter.value}
+                  style={[
+                    styles.filterOption,
+                    selectedCategory === filter.value && styles.selectedFilter
+                  ]}
+                  onPress={() => setSelectedCategory(filter.value)}
+                >
+                  <Text style={[
+                    styles.filterOptionText,
+                    selectedCategory === filter.value && styles.selectedFilterText
+                  ]}>
+                    {filter.label} ({filter.count})
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+          
+          {/* Priority Filters */}
+          <View style={styles.filterRow}>
+            <Text style={styles.filterLabel}>Priority:</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
+              {[
+                { value: 'all', label: 'All', count: prayers.length },
+                ...priorities.map(pri => ({
+                  value: pri.id,
+                  label: pri.label,
+                  count: prayers.filter(p => p.priority === pri.id).length
+                }))
+              ].map((filter) => (
+                <TouchableOpacity
+                  key={filter.value}
+                  style={[
+                    styles.filterOption,
+                    selectedPriority === filter.value && styles.selectedFilter
+                  ]}
+                  onPress={() => setSelectedPriority(filter.value)}
+                >
+                  <Text style={[
+                    styles.filterOptionText,
+                    selectedPriority === filter.value && styles.selectedFilterText
+                  ]}>
+                    {filter.label} ({filter.count})
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+
+        {/* Add Prayer Form */}
+        {showAddForm && (
+          <View style={styles.addFormContainer}>
+            <LinearGradient
+              colors={['rgba(255, 255, 255, 0.25)', 'rgba(255, 255, 255, 0.15)']}
+              style={styles.formGradient}
+            >
+              <Text style={styles.formTitle}>Add New Prayer</Text>
+              
+              <TextInput
+                style={styles.input}
+                placeholder="Prayer title"
+                value={title}
+                onChangeText={setTitle}
+                placeholderTextColor="rgba(255, 255, 255, 0.7)"
+              />
+              
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                placeholder="Description (optional)"
+                value={description}
+                onChangeText={setDescription}
+                multiline
+                numberOfLines={3}
+                placeholderTextColor="rgba(255, 255, 255, 0.7)"
+              />
+              
+              <Text style={styles.sectionLabel}>Category</Text>
+              <View style={styles.categoryGrid}>
+                {categories.map((category) => (
+                  <TouchableOpacity
+                    key={category.id}
+                    style={[
+                      styles.categoryButton,
+                      formCategory === category.id && styles.categoryButtonSelected
+                    ]}
+                    onPress={() => setFormCategory(category.id)}
+                  >
+                    <Text style={styles.categoryIcon}>{category.icon}</Text>
+                    <Text style={styles.categoryLabel}>{category.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              
+              <Text style={styles.sectionLabel}>Priority</Text>
+              <View style={styles.priorityGrid}>
+                {priorities.map((priority) => (
+                  <TouchableOpacity
+                    key={priority.id}
+                    style={[
+                      styles.priorityButton,
+                      formPriority === priority.id && styles.priorityButtonSelected,
+                      { borderColor: priority.color }
+                    ]}
+                    onPress={() => setFormPriority(priority.id)}
+                  >
+                    <Text style={[styles.priorityLabel, { color: priority.color }]}>
+                      {priority.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              
+              <View style={styles.formButtons}>
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  onPress={() => setShowAddForm(false)}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[styles.addButton, !title.trim() && styles.addButtonDisabled]}
+                  onPress={addPrayer}
+                  disabled={!title.trim() || loading}
+                >
+                  <LinearGradient
+                    colors={['#8B5CF6', '#A855F7', '#C084FC']}
+                    style={styles.addButtonGradient}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                  >
+                    <Plus size={20} color="white" style={{ marginRight: 8 }} />
+                    <Text style={styles.addButtonText}>
+                      {loading ? 'Adding...' : 'Add Prayer'}
+                    </Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            </LinearGradient>
+          </View>
+        )}
+
+        {/* Prayers List */}
+        <View style={styles.prayersSection}>
+          <View style={styles.listHeader}>
+            <Text style={styles.sectionTitle}>
+              {selectedStatus === 'all' ? 'All Prayers' : `${selectedStatus.charAt(0).toUpperCase() + selectedStatus.slice(1)} Prayers`}
+            </Text>
+            <Text style={styles.prayerCount}>
+              {filteredPrayers.length} of {prayers.length} prayer{filteredPrayers.length !== 1 ? 's' : ''}
+            </Text>
+          </View>
+          
+          {filteredPrayers.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>
+                {searchQuery.trim() ? 'No prayers found' : 'No prayers yet'}
+              </Text>
+              <Text style={styles.emptyStateSubtext}>
+                {searchQuery.trim() ? 'Try adjusting your search or filters' : 'Start by adding your first prayer'}
+              </Text>
+              {!searchQuery.trim() && (
+                <TouchableOpacity
+                  style={styles.emptyButton}
+                  onPress={() => setShowAddForm(true)}
+                >
+                  <Text style={styles.emptyButtonText}>Add Prayer</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ) : (
+            <View style={styles.prayersList}>
+              {filteredPrayers.map((prayer) => (
+                <View key={prayer.id} style={styles.prayerCard}>
+                  <LinearGradient
+                    colors={['rgba(255, 255, 255, 0.25)', 'rgba(255, 255, 255, 0.15)']}
+                    style={styles.prayerGradient}
+                  >
+                    <View style={styles.prayerHeader}>
+                      <View style={styles.prayerInfo}>
+                        <View style={styles.prayerTitleRow}>
+                          {getStatusIcon(prayer.status)}
+                          <Text style={styles.prayerTitle}>{prayer.title}</Text>
+                        </View>
+                        
+                        {prayer.description && (
+                          <Text style={styles.prayerDescription}>{prayer.description}</Text>
+                        )}
+                        
+                        <View style={styles.prayerMeta}>
+                          <View style={[
+                            styles.categoryBadge,
+                            { backgroundColor: getCategoryColor(prayer.category) }
+                          ]}>
+                            <Text style={styles.categoryBadgeText}>
+                              {categories.find(cat => cat.id === prayer.category)?.label}
+                            </Text>
+                          </View>
+                          
+                          <View style={[
+                            styles.priorityBadge,
+                            { borderColor: getPriorityColor(prayer.priority) }
+                          ]}>
+                            <Text style={[
+                              styles.priorityBadgeText,
+                              { color: getPriorityColor(prayer.priority) }
+                            ]}>
+                              {priorities.find(pri => pri.id === prayer.priority)?.label}
+                            </Text>
+                          </View>
+                        </View>
+                        
+                        <Text style={styles.prayerDate}>
+                          {new Date(prayer.created_at).toLocaleDateString()}
+                        </Text>
+                      </View>
+                      
+                      <View style={styles.prayerActions}>
+                        {prayer.status === 'active' && (
+                          <>
+                            <TouchableOpacity
+                              style={styles.actionButton}
+                              onPress={() => updatePrayerStatus(prayer.id, 'answered')}
+                            >
+                              <CheckCircle size={16} color="#10B981" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.actionButton}
+                              onPress={() => updatePrayerStatus(prayer.id, 'paused')}
+                            >
+                              <Clock size={16} color="#F59E0B" />
+                            </TouchableOpacity>
+                          </>
+                        )}
+                        
+                        {prayer.status === 'paused' && (
+                          <TouchableOpacity
+                            style={styles.actionButton}
+                            onPress={() => updatePrayerStatus(prayer.id, 'active')}
+                          >
+                            <Heart size={16} color="#EF4444" />
+                          </TouchableOpacity>
+                        )}
+                        
+                        <TouchableOpacity
+                          style={styles.actionButton}
+                          onPress={() => deletePrayer(prayer.id)}
+                        >
+                          <Trash2 size={16} color="#EF4444" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </LinearGradient>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+        
+        {/* Bottom spacing for tab bar */}
+        <View style={styles.bottomSpacing} />
+      </ScrollView>
+    </LinearGradient>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingHorizontal: 20,
+    paddingTop: 60,
+    paddingBottom: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.2)',
+    backdropFilter: 'blur(10px)',
+  },
+  headerLeft: {
+    flex: 1,
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#1F2937',
+    marginBottom: 4,
+    textShadowColor: 'rgba(255, 255, 255, 0.3)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  headerSubtitle: {
+    fontSize: 16,
+    color: '#374151',
+    fontWeight: '500',
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  headerButton: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#8B5CF6',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.3)',
+    overflow: 'hidden',
+  },
+  headerButtonGradient: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scrollView: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingBottom: 140,
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 16,
+    marginBottom: 24,
+    justifyContent: 'center',
+  },
+  statCard: {
+    width: (screenWidth - 72) / 2,
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  statGradient: {
+    padding: 20,
+    alignItems: 'center',
+    minHeight: 80,
+  },
+  statNumber: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#1F2937',
+    marginBottom: 4,
+    textShadowColor: 'rgba(255, 255, 255, 0.3)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  statLabel: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  filtersSection: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 16,
+    textShadowColor: 'rgba(255, 255, 255, 0.3)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  searchContainer: {
+    marginBottom: 16,
+  },
+  searchInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#1F2937',
+    borderWidth: 1,
+    borderColor: 
+                
+
+    'rgba(255, 255, 255, 0.3)',
+  },
+  filterRow: {
+    marginBottom: 16,
+  },
+  filterLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 8,
+  },
+  filterScroll: {
+    flexGrow: 0,
+  },
+  filterOption: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  selectedFilter: {
+    backgroundColor: 'rgba(139, 92, 246, 0.3)',
+    borderColor: '#8B5CF6',
+  },
+  filterOptionText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1F2937',
+  },
+  selectedFilterText: {
+    color: '#8B5CF6',
+    fontWeight: '600',
+  },
+  addFormContainer: {
+    marginBottom: 24,
+  },
+  formGradient: {
+    padding: 24,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  formTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  input: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#1F2937',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    marginBottom: 16,
+  },
+  textArea: {
+    height: 80,
+    textAlignVertical: 'top',
+  },
+  sectionLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 12,
+  },
+  categoryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 20,
+  },
+  categoryButton: {
+    flex: 1,
+    minWidth: (screenWidth - 120) / 3,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  categoryButtonSelected: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+  },
+  categoryIcon: {
+    fontSize: 24,
+    marginBottom: 4,
+  },
+  categoryLabel: {
+    fontSize: 14,
+    color: '#1F2937',
+    fontWeight: '500',
+  },
+  priorityGrid: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 20,
+  },
+  priorityButton: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  priorityButtonSelected: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderWidth: 2,
+  },
+  priorityLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  formButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  addButton: {
+    flex: 2,
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: '#8B5CF6',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.3)',
+  },
+  addButtonDisabled: {
+    opacity: 0.6,
+  },
+  addButtonGradient: {
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+  },
+  addButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: 'white',
+    textShadowColor: 'rgba(0, 0, 0, 0.2)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  prayersSection: {
+    marginBottom: 24,
+  },
+  listHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  prayerCount: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  emptyStateText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    color: '#9CA3AF',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  emptyButton: {
+    backgroundColor: '#8B5CF6',
+    borderRadius: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+  },
+  emptyButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  prayersList: {
+    gap: 12,
+  },
+  prayerCard: {
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  prayerGradient: {
+    padding: 20,
+  },
+  prayerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  prayerInfo: {
+    flex: 1,
+    marginRight: 16,
+  },
+  prayerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 8,
+  },
+  prayerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1F2937',
+    flex: 1,
+  },
+  prayerDescription: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginBottom: 12,
+    lineHeight: 20,
+  },
+  prayerMeta: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  categoryBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  categoryBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: 'white',
+  },
+  priorityBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  priorityBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  prayerDate: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    fontWeight: '500',
+  },
+  prayerActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  actionButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  bottomSpacing: {
+    height: 100,
+  },
+});
