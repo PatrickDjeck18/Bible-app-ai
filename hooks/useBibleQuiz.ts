@@ -11,7 +11,8 @@ import {
   getProgressToNextLevel,
   LEVEL_SYSTEM
 } from '@/constants/QuizQuestions';
-import { supabase } from '@/lib/supabase';
+import { db } from '@/lib/firebase'; // Assuming you have a Firebase app instance exported as 'db'
+import { doc, getDoc, setDoc, updateDoc, collection, addDoc } from 'firebase/firestore';
 import { useAuth } from './useAuth';
 
 export interface QuizState {
@@ -94,18 +95,16 @@ export const useBibleQuiz = () => {
     }
   });
 
-  // Load user stats from Supabase on mount
+  // Load user stats from Firestore on mount
   useEffect(() => {
     const loadUserStats = async () => {
       try {
         if (user) {
-          const { data: userStats } = await supabase
-            .from('user_quiz_stats')
-            .select('*')
-            .eq('user_id', user.id)
-            .single();
+          const userDocRef = doc(db, 'user_quiz_stats', user.uid);
+          const userDocSnap = await getDoc(userDocRef);
 
-          if (userStats) {
+          if (userDocSnap.exists()) {
+            const userStats = userDocSnap.data();
             setStats(prev => ({
               ...prev,
               totalGamesPlayed: userStats.total_sessions,
@@ -126,7 +125,7 @@ export const useBibleQuiz = () => {
     };
 
     loadUserStats();
-  }, []);
+  }, [user]);
 
   // Timer effect for timed mode
   useEffect(() => {
@@ -361,84 +360,62 @@ export const useBibleQuiz = () => {
   // Complete quiz and update final stats
   const completeQuiz = useCallback(async (finalScore: number) => {
     try {
-      // Save quiz results to Supabase
       if (user) {
-        // Save quiz session
-        const { error: sessionError } = await supabase
-          .from('quiz_sessions')
-          .insert({
-            user_id: user.id,
-            questions_answered: quizState.questions.length,
-            correct_answers: quizState.correctAnswers,
-            wrong_answers: quizState.wrongAnswers,
-            total_score: finalScore,
-            category: quizState.category,
-            difficulty: quizState.difficulty,
-            time_taken_seconds: 600, // Approximate time
-            completed_at: new Date().toISOString()
-          });
+        // 1. Save quiz session to Firestore
+        await addDoc(collection(db, 'quiz_sessions'), {
+          user_id: user.uid,
+          questions_answered: quizState.questions.length,
+          correct_answers: quizState.correctAnswers,
+          wrong_answers: quizState.wrongAnswers,
+          total_score: finalScore,
+          category: quizState.category,
+          difficulty: quizState.difficulty,
+          completed_at: new Date(),
+          game_mode: quizState.gameMode,
+          time_taken_seconds: 600, // Placeholder
+        });
 
-        if (sessionError) {
-          console.error('Error saving quiz session:', sessionError);
-        }
+        // 2. Update user stats in Firestore
+        const userDocRef = doc(db, 'user_quiz_stats', user.uid);
+        const userDocSnap = await getDoc(userDocRef);
 
-        // Update user stats
-        const { data: existingStats } = await supabase
-          .from('user_quiz_stats')
-          .select('*')
-          .eq('user_id', user.id)
-          .single();
-
-        if (existingStats) {
+        if (userDocSnap.exists()) {
           // Update existing stats
-          const { error: updateError } = await supabase
-            .from('user_quiz_stats')
-            .update({
-              total_sessions: existingStats.total_sessions + 1,
-              total_questions_answered: existingStats.total_questions_answered + quizState.questions.length,
-              total_correct_answers: existingStats.total_correct_answers + quizState.correctAnswers,
-              best_score: Math.max(existingStats.best_score, finalScore),
-              current_streak: quizState.streak > existingStats.current_streak ? quizState.streak : existingStats.current_streak,
-              longest_streak: Math.max(existingStats.longest_streak, quizState.streak),
-              total_time_spent_seconds: existingStats.total_time_spent_seconds + 600,
-              updated_at: new Date().toISOString()
-            })
-            .eq('user_id', user.id);
-
-          if (updateError) {
-            console.error('Error updating user stats:', updateError);
-          }
+          const existingStats = userDocSnap.data();
+          await updateDoc(userDocRef, {
+            total_sessions: existingStats.total_sessions + 1,
+            total_questions_answered: existingStats.total_questions_answered + quizState.questions.length,
+            total_correct_answers: existingStats.total_correct_answers + quizState.correctAnswers,
+            best_score: Math.max(existingStats.best_score, finalScore),
+            longest_streak: Math.max(existingStats.longest_streak, quizState.streak),
+            updated_at: new Date(),
+          });
         } else {
-          // Create new stats
-          const { error: insertError } = await supabase
-            .from('user_quiz_stats')
-            .insert({
-              user_id: user.id,
-              total_sessions: 1,
-              total_questions_answered: quizState.questions.length,
-              total_correct_answers: quizState.correctAnswers,
-              best_score: finalScore,
-              current_streak: quizState.streak,
-              longest_streak: quizState.streak,
-              favorite_category: quizState.category,
-              total_time_spent_seconds: 600
-            });
-
-          if (insertError) {
-            console.error('Error creating user stats:', insertError);
-          }
+          // Create new stats document
+          await setDoc(userDocRef, {
+            user_id: user.uid,
+            total_sessions: 1,
+            total_questions_answered: quizState.questions.length,
+            total_correct_answers: quizState.correctAnswers,
+            best_score: finalScore,
+            longest_streak: quizState.streak,
+            created_at: new Date(),
+            updated_at: new Date(),
+          });
         }
       }
     } catch (error) {
       console.error('Error completing quiz:', error);
     }
-
+    
+    // Update local state for immediate UI feedback
     setStats(prev => ({
       ...prev,
       totalGamesPlayed: prev.totalGamesPlayed + 1,
-      totalScore: prev.totalScore + finalScore
+      totalScore: Math.max(prev.totalScore, finalScore),
+      currentLevel: getCurrentLevel(Math.max(prev.totalScore, finalScore))
     }));
-  }, [quizState]);
+  }, [user, quizState]);
 
   // Get current question
   const getCurrentQuestion = useCallback((): QuizQuestion | null => {

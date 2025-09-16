@@ -12,7 +12,7 @@ import {
   Platform,
   ScrollView,
 } from 'react-native';
-import { Mail, Eye, EyeOff, Lock, ArrowRight, Book } from 'lucide-react-native';
+import { Mail, Eye, EyeOff, Lock, ArrowRight } from 'lucide-react-native';
 import { Colors, Typography, Spacing, BorderRadius } from '@/constants/DesignTokens';
 import { router } from 'expo-router';
 import { useAuth } from '@/hooks/useAuth';
@@ -166,15 +166,6 @@ export default function LoginScreen() {
         >
           {/* Hero Section */}
           <View style={styles.heroSection}>
-            {/* Logo */}
-            <View style={styles.logoContainer}>
-              <View style={styles.logoWrapper}>
-                <View style={styles.logoInner}>
-                  <Book size={48} color="white" />
-                </View>
-              </View>
-            </View>
-            
             <Text style={styles.welcomeText}>Welcome back to</Text>
             <Text style={styles.appName}>Daily Bread</Text>
             <Text style={styles.tagline}>
@@ -286,30 +277,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing['3xl'],
     minHeight: height * 0.35,
-    justifyContent: 'center',
-  },
-  logoContainer: {
-    marginBottom: Spacing['3xl'],
-  },
-  logoWrapper: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: Colors.primary[600],
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: Colors.primary[600],
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
-    elevation: 8,
-  },
-  logoInner: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: Colors.primary[600],
-    alignItems: 'center',
     justifyContent: 'center',
   },
   welcomeText: {

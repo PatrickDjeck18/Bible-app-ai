@@ -1,9 +1,20 @@
 import { useState, useCallback, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { db } from '@/lib/firebase';
+import {
+  collection,
+  query,
+  where,
+  limit,
+  getDocs,
+  doc,
+  updateDoc,
+  getDoc,
+  addDoc
+} from 'firebase/firestore';
 import { useAuth } from './useAuth';
 
 export interface DatabaseQuizQuestion {
-  id: number;
+  id: string;
   question: string;
   option_a: string;
   option_b: string;
@@ -21,7 +32,7 @@ export interface DatabaseQuizQuestion {
 }
 
 export interface QuizSession {
-  id?: number;
+  id?: string;
   user_id: string;
   questions_answered: number;
   correct_answers: number;
@@ -35,7 +46,7 @@ export interface QuizSession {
 }
 
 export interface UserQuizStats {
-  id?: number;
+  id?: string; // Changed from number to string for Firestore
   user_id: string;
   total_sessions: number;
   total_questions_answered: number;
@@ -118,28 +129,28 @@ export const useQuizDatabase = () => {
   // Load user stats from database on mount
   useEffect(() => {
     loadUserStats();
-  }, []);
+  }, [user]);
 
   // Manual refresh function for debugging
   const refreshStats = useCallback(async () => {
     console.log('Manually refreshing stats...');
     await loadUserStats();
-  }, []);
+  }, [user]);
 
   const loadUserStats = async () => {
     try {
-      console.log('Loading user stats for user:', user?.id);
+      console.log('Loading user stats for user:', user?.uid);
       
       if (user) {
-        const { data: userStats, error } = await supabase
-          .from('user_quiz_stats')
-          .select('*')
-          .eq('user_id', user.id)
-          .single();
+        const statsQuery = query(collection(db, 'user_quiz_stats'), where('user_id', '==', user.uid), limit(1));
+        const userStatsSnapshot = await getDocs(statsQuery);
 
-        console.log('User stats query result:', { userStats, error });
+        console.log('User stats query result:', userStatsSnapshot.docs.length);
 
-        if (userStats) {
+        if (!userStatsSnapshot.empty) {
+          const userStatsDoc = userStatsSnapshot.docs[0];
+          const userStats = userStatsDoc.data() as UserQuizStats;
+
           const newStats = {
             totalGamesPlayed: userStats.total_sessions || 0,
             totalQuestionsAnswered: userStats.total_questions_answered || 0,
@@ -203,14 +214,10 @@ export const useQuizDatabase = () => {
     setLoading(true);
     try {
       // Get all available questions
-      const { data, error } = await supabase
-        .from('quiz_questions')
-        .select('*');
-
-      if (error) {
-        console.error('Error fetching questions:', error);
-        return [];
-      }
+      const questionsCollection = collection(db, 'quiz_questions');
+      const q = query(questionsCollection, limit(options.limit || 200));
+      const querySnapshot = await getDocs(q);
+      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as DatabaseQuizQuestion[];
 
       if (!data || data.length === 0) {
         console.log('No questions found');
@@ -227,7 +234,7 @@ export const useQuizDatabase = () => {
       // Shuffle the questions for better randomization
       const shuffledQuestions = [...uniqueQuestions].sort(() => Math.random() - 0.5);
 
-      // Return the requested number of questions, or all if we have fewer
+      // Return the requested number of questions
       const requestedLimit = options.limit || 15;
       const finalQuestions = shuffledQuestions.slice(0, Math.min(requestedLimit, shuffledQuestions.length));
 
@@ -274,7 +281,7 @@ export const useQuizDatabase = () => {
       testament: 'both',
       totalScore: stats.totalScore
     });
-  }, [stats.totalScore]);
+  }, [stats.totalScore, fetchQuestions]);
 
   // Answer a question
   const answerQuestion = useCallback((answerIndex: number) => {
@@ -342,40 +349,40 @@ export const useQuizDatabase = () => {
   const completeQuiz = useCallback(async (finalScore: number) => {
     try {
       if (user) {
-        console.log('Saving quiz results for user:', user.id);
-        console.log('Quiz state:', {
-          questions: quizState.questions.length,
-          correct: quizState.correctAnswers,
-          wrong: quizState.wrongAnswers,
-          score: finalScore,
-          category: quizState.category,
-          difficulty: quizState.difficulty
-        });
+        console.log('Saving quiz results for user:', user.uid);
 
-        const { data: existingStats } = await supabase
-          .from('user_quiz_stats')
-          .select('*')
-          .eq('user_id', user.id)
-          .single();
+        const statsQuery = query(collection(db, 'user_quiz_stats'), where('user_id', '==', user.uid), limit(1));
+        const userStatsSnapshot = await getDocs(statsQuery);
 
-        if (existingStats) {
-          const { error: updateError } = await supabase
-            .from('user_quiz_stats')
-            .update({
-              total_sessions: existingStats.total_sessions + 1,
-              total_questions_answered: existingStats.total_questions_answered + quizState.questions.length,
-              total_correct_answers: existingStats.total_correct_answers + quizState.correctAnswers,
-              best_score: Math.max(existingStats.best_score, finalScore),
-              current_streak: quizState.streak > existingStats.current_streak ? quizState.streak : existingStats.current_streak,
-              longest_streak: Math.max(existingStats.longest_streak, quizState.streak),
-              total_time_spent_seconds: existingStats.total_time_spent_seconds + 600,
-              updated_at: new Date().toISOString()
-            })
-            .eq('user_id', user.id);
+        if (!userStatsSnapshot.empty) {
+          const userStatsDoc = userStatsSnapshot.docs[0];
+          const existingStats = userStatsDoc.data() as UserQuizStats;
+          
+          await updateDoc(userStatsDoc.ref, {
+            total_sessions: (existingStats.total_sessions || 0) + 1,
+            total_questions_answered: (existingStats.total_questions_answered || 0) + quizState.questions.length,
+            total_correct_answers: (existingStats.total_correct_answers || 0) + quizState.correctAnswers,
+            best_score: Math.max(existingStats.best_score || 0, finalScore),
+            current_streak: quizState.streak,
+            longest_streak: Math.max(existingStats.longest_streak || 0, quizState.streak),
+            total_time_spent_seconds: (existingStats.total_time_spent_seconds || 0) + 600,
+            updated_at: new Date().toISOString()
+          });
 
-          if (updateError) {
-            console.error('Error updating user stats:', updateError);
-          }
+        } else {
+          // Create new stats entry
+          await addDoc(collection(db, 'user_quiz_stats'), {
+            user_id: user.uid,
+            total_sessions: 1,
+            total_questions_answered: quizState.questions.length,
+            total_correct_answers: quizState.correctAnswers,
+            best_score: finalScore,
+            current_streak: quizState.streak,
+            longest_streak: quizState.streak,
+            total_time_spent_seconds: 600,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          });
         }
 
         // Reload stats
@@ -391,7 +398,7 @@ export const useQuizDatabase = () => {
       totalGamesPlayed: prev.totalGamesPlayed + 1,
       totalScore: Math.max(prev.totalScore, finalScore)
     }));
-  }, [quizState]);
+  }, [quizState, user, loadUserStats]);
 
   // Get current question
   const getCurrentQuestion = useCallback((): DatabaseQuizQuestion | null => {

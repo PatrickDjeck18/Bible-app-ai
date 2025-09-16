@@ -116,7 +116,6 @@ export const VerseStudyAssistant: React.FC<VerseStudyAssistantProps> = ({
         {studyContent.loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={Colors.primary[600]} />
-            <Text style={styles.loadingText}>Analyzing verse with DeepSeek...</Text>
           </View>
         ) : (
           <>

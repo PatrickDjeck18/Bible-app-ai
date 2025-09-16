@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useBibleAPI } from '../hooks/useBibleAPI';
+import { LinearGradient } from 'expo-linear-gradient';
 import {
   View,
   Text,
@@ -7,6 +9,8 @@ import {
   TouchableOpacity,
   SafeAreaView,
   Dimensions,
+  Platform,
+  StatusBar,
 } from 'react-native';
 import {
   ArrowLeft,
@@ -17,7 +21,7 @@ import {
   Volume2,
   Sparkles
 } from 'lucide-react-native';
-import { Colors, Typography, Spacing, BorderRadius } from '@/constants/DesignTokens';
+import { Colors, Typography, Spacing, BorderRadius, Shadows } from '@/constants/DesignTokens';
 import * as Speech from 'expo-speech';
 import { VerseStudyAssistant } from './VerseStudyAssistant';
 
@@ -33,6 +37,8 @@ interface BibleReaderProps {
   chapterNumber: number;
   verses: Verse[];
   bibleVersion: string;
+  bibleId: string;
+  bookId: string;
   onBack: () => void;
   onSearch: () => void;
   onMenu: () => void;
@@ -47,6 +53,8 @@ export const BibleReader: React.FC<BibleReaderProps> = ({
   chapterNumber,
   verses,
   bibleVersion,
+  bibleId,
+  bookId,
   onBack,
   onSearch,
   onMenu,
@@ -146,36 +154,55 @@ export const BibleReader: React.FC<BibleReaderProps> = ({
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.headerButton} onPress={onBack}>
-          <ArrowLeft size={24} color={Colors.neutral[900]} />
-        </TouchableOpacity>
-        
-        {/* Audio Controls */}
-        <View style={styles.audioControls}>
-          <TouchableOpacity
-            style={[styles.audioButton, !verses.length && styles.audioButtonDisabled]}
-            onPress={togglePlayPause}
-            disabled={!verses.length}
-          >
-            {isPlaying ? (
-              <Pause size={20} color={Colors.neutral[900]} />
-            ) : (
-              <Play size={20} color={Colors.neutral[900]} />
-            )}
-          </TouchableOpacity>
-          
-          {isPlaying && (
-            <TouchableOpacity
-              style={styles.audioButton}
-              onPress={stopAudio}
-            >
-              <Volume2 size={20} color={Colors.neutral[900]} />
+      {/* Background Gradient */}
+      <LinearGradient
+        colors={Colors.gradients.spiritualLight}
+        style={StyleSheet.absoluteFillObject}
+      />
+      
+      {/* Header Card */}
+      <View style={styles.hero}>
+        <LinearGradient
+          colors={Colors.gradients.spiritualLight || ['#fdfcfb', '#e2d1c3', '#c9d6ff']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.heroGradient}
+        >
+          <View style={styles.heroContent}>
+            <TouchableOpacity style={styles.heroActionButton} onPress={onBack}>
+              <ArrowLeft size={20} color={Colors.primary[600]} />
             </TouchableOpacity>
-          )}
-
-        </View>
+            
+            <View style={styles.heroTextBlock}>
+              <Text style={styles.heroTitle}>{bookName} {chapterNumber}</Text>
+              <Text style={styles.heroSubtitle}></Text>
+            </View>
+            
+            <View style={styles.heroActions}>
+              {/* Audio Controls */}
+              <TouchableOpacity
+                style={[styles.audioButton, !verses.length && styles.audioButtonDisabled]}
+                onPress={togglePlayPause}
+                disabled={!verses.length}
+              >
+                {isPlaying ? (
+                  <Pause size={20} color={Colors.primary[600]} />
+                ) : (
+                  <Play size={20} color={Colors.primary[600]} />
+                )}
+              </TouchableOpacity>
+              
+              {isPlaying && (
+                <TouchableOpacity
+                  style={styles.audioButton}
+                  onPress={stopAudio}
+                >
+                  <Volume2 size={20} color={Colors.primary[600]} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </LinearGradient>
       </View>
 
       {/* Bible Content */}
@@ -216,12 +243,11 @@ export const BibleReader: React.FC<BibleReaderProps> = ({
               style={[
                 styles.verseContainer,
                 currentVerse === index && styles.currentVerseContainer,
-                selectedVerse === index && styles.selectedVerseContainer
+                selectedVerse === index && styles.selectedVerseContainer,
               ]}
             >
               <TouchableOpacity
                 onPress={() => handleVerseSelect(index)}
-                onLongPress={() => openStudyAssistant(index)}
                 delayLongPress={500}
               >
                 <Text style={[
@@ -271,23 +297,47 @@ export const BibleReader: React.FC<BibleReaderProps> = ({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'transparent',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  // Header Card Styles
+  hero: {
+    paddingTop: (Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) : 0) + Spacing.md,
+    paddingBottom: Spacing.lg,
+  },
+  heroGradient: {
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    backgroundColor: '#FFFFFF',
+    paddingVertical: Spacing.lg,
+    borderRadius: BorderRadius.lg,
+    marginHorizontal: Spacing.lg,
+    ...Shadows.md,
   },
-  headerButton: {
+  heroContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  heroActionButton: {
     padding: Spacing.sm,
+    backgroundColor: Colors.neutral[100],
     borderRadius: BorderRadius.md,
   },
-  audioControls: {
+  heroTextBlock: {
+    flex: 1,
+    marginHorizontal: Spacing.md,
+  },
+  heroTitle: {
+    fontSize: Typography.sizes['3xl'],
+    fontWeight: Typography.weights.bold,
+    color: Colors.neutral[800],
+    marginBottom: Spacing.xs,
+  },
+  heroSubtitle: {
+    fontSize: Typography.sizes.base,
+    color: Colors.neutral[600],
+    lineHeight: Typography.lineHeights.normal,
+  },
+  heroActions: {
     flexDirection: 'row',
-    alignItems: 'center',
     gap: Spacing.sm,
   },
   audioButton: {
@@ -315,7 +365,7 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'transparent',
   },
   contentWrapper: {
     flex: 1,

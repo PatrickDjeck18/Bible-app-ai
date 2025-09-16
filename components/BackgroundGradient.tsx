@@ -1,10 +1,10 @@
 import React from 'react';
-import { StyleSheet, StatusBar } from 'react-native';
+import { StyleSheet, StatusBar, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Colors } from '@/constants/DesignTokens';
 
 interface BackgroundGradientProps {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   style?: any;
 }
 
@@ -24,7 +24,9 @@ const BackgroundGradient: React.FC<BackgroundGradientProps> = ({
         style
       ]}
     >
-      {children}
+      <View style={StyleSheet.absoluteFillObject}>
+        {children}
+      </View>
     </LinearGradient>
   );
 };

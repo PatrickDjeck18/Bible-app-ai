@@ -1,7 +1,56 @@
-import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
-import type { QuizQuestion, QuizSession } from '@/lib/supabase';
+import { useEffect, useState, useCallback } from 'react';
+import { db } from '@/lib/firebase';
+import { 
+  collection, 
+  query, 
+  where, 
+  limit, 
+  getDocs, 
+  addDoc, 
+  doc, 
+  updateDoc,
+  getDoc
+} from 'firebase/firestore';
 import { useAuth } from './useAuth';
+
+// Corrected: Added power_ups_used to QuizSession interface
+export interface QuizSession {
+  id: string;
+  user_id: string;
+  questions: string[];
+  current_question: number;
+  score: number;
+  correct_answers: number;
+  wrong_answers: number;
+  time_remaining: number;
+  power_ups_used: {
+    hints: number;
+    fifty_fifty: number;
+    extra_time: number;
+  };
+  status: 'active' | 'paused' | 'completed';
+  started_at: string;
+  completed_at: string | null;
+}
+
+// Corrected: Updated QuizQuestion properties based on your CSV data
+export interface QuizQuestion {
+  id: string;
+  question: string;
+  option_a: string;
+  option_b: string;
+  option_c: string;
+  option_d: string;
+  correct_answer: number;
+  explanation: string;
+  category: string;
+  difficulty: string;
+  testament: string;
+  book_reference: string;
+  verse_reference: string;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface QuizState {
   session: QuizSession | null;
@@ -31,66 +80,51 @@ export function useQuiz() {
     },
   });
 
-  const startNewQuiz = async (category?: string, difficulty?: string) => {
+  const startNewQuiz = useCallback(async (category?: string, difficulty?: string) => {
     if (!user) return { error: 'User not authenticated' };
 
     setQuizState(prev => ({ ...prev, loading: true }));
 
     try {
-      // Fetch random questions based on criteria
-      let query = supabase
-        .from('quiz_questions')
-        .select('*')
-        .limit(10);
+      let questionsQuery = query(collection(db, 'quiz_questions'), limit(10));
 
       if (category && category !== 'all') {
-        query = query.eq('category', category);
+        questionsQuery = query(questionsQuery, where('category', '==', category));
       }
       if (difficulty && difficulty !== 'all') {
-        query = query.eq('difficulty', difficulty);
+        questionsQuery = query(questionsQuery, where('difficulty', '==', difficulty));
       }
 
-      const { data: questions, error: questionsError } = await query;
-
-      if (questionsError) {
-        console.error('Error fetching questions:', questionsError);
-        return { error: questionsError };
-      }
+      const questionSnapshot = await getDocs(questionsQuery);
+      const questions = questionSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as QuizQuestion[];
 
       if (!questions || questions.length === 0) {
         return { error: 'No questions found for the selected criteria' };
       }
 
-      // Shuffle questions
       const shuffledQuestions = questions.sort(() => Math.random() - 0.5);
 
-      // Create quiz session
-      const { data: session, error: sessionError } = await supabase
-        .from('quiz_sessions')
-        .insert({
-          user_id: user.id,
-          questions: shuffledQuestions.map(q => q.id),
-          current_question: 0,
-          score: 0,
-          correct_answers: 0,
-          wrong_answers: 0,
-          time_remaining: 45,
-          power_ups_used: {
-            hints: 0,
-            fifty_fifty: 0,
-            extra_time: 0,
-          },
-          status: 'active',
-          started_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
+      const newSession = {
+        user_id: user.uid,
+        questions: shuffledQuestions.map(q => q.id),
+        current_question: 0,
+        score: 0,
+        correct_answers: 0,
+        wrong_answers: 0,
+        time_remaining: 45,
+        power_ups_used: {
+          hints: 0,
+          fifty_fifty: 0,
+          extra_time: 0,
+        },
+        status: 'active',
+        started_at: new Date().toISOString(),
+      };
 
-      if (sessionError) {
-        console.error('Error creating session:', sessionError);
-        return { error: sessionError };
-      }
-
+      const sessionRef = await addDoc(collection(db, 'quiz_sessions'), newSession);
+      const sessionDoc = await getDoc(sessionRef);
+      const session = { id: sessionDoc.id, ...sessionDoc.data() } as QuizSession;
+      
       setQuizState(prev => ({
         ...prev,
         session,
@@ -111,9 +145,9 @@ export function useQuiz() {
       setQuizState(prev => ({ ...prev, loading: false }));
       return { error };
     }
-  };
+  }, [user]);
 
-  const answerQuestion = async (selectedAnswer: number) => {
+  const answerQuestion = useCallback(async (selectedAnswer: number) => {
     if (!quizState.session || !quizState.currentQuestion) return;
 
     const isCorrect = selectedAnswer === quizState.currentQuestion.correct_answer;
@@ -124,25 +158,15 @@ export function useQuiz() {
     const isLastQuestion = nextQuestionIndex >= quizState.questions.length;
 
     try {
-      // Update session
-      const { error: updateError } = await supabase
-        .from('quiz_sessions')
-        .update({
-          current_question: nextQuestionIndex,
-          score: newScore,
-          correct_answers: newCorrect,
-          wrong_answers: newWrong,
-          status: isLastQuestion ? 'completed' : 'active',
-          completed_at: isLastQuestion ? new Date().toISOString() : null,
-        })
-        .eq('id', quizState.session.id);
+      await updateDoc(doc(db, 'quiz_sessions', quizState.session.id), {
+        current_question: nextQuestionIndex,
+        score: newScore,
+        correct_answers: newCorrect,
+        wrong_answers: newWrong,
+        status: isLastQuestion ? 'completed' : 'active',
+        completed_at: isLastQuestion ? new Date().toISOString() : null,
+      });
 
-      if (updateError) {
-        console.error('Error updating session:', updateError);
-        return { error: updateError };
-      }
-
-      // Update local state
       const updatedSession = {
         ...quizState.session,
         current_question: nextQuestionIndex,
@@ -172,9 +196,9 @@ export function useQuiz() {
       console.error('Error answering question:', error);
       return { error };
     }
-  };
+  }, [quizState]);
 
-  const usePowerUp = async (type: 'hints' | 'fifty_fifty' | 'extra_time') => {
+  const usePowerUp = useCallback(async (type: 'hints' | 'fifty_fifty' | 'extra_time') => {
     if (!quizState.session || quizState.powerUps[type] <= 0) return { error: 'Power-up not available' };
 
     const newPowerUps = {
@@ -188,20 +212,10 @@ export function useQuiz() {
     };
 
     try {
-      // Update session in database
-      const { error: updateError } = await supabase
-        .from('quiz_sessions')
-        .update({
-          power_ups_used: newPowerUpsUsed,
-        })
-        .eq('id', quizState.session.id);
+      await updateDoc(doc(db, 'quiz_sessions', quizState.session.id), {
+        power_ups_used: newPowerUpsUsed,
+      });
 
-      if (updateError) {
-        console.error('Error updating power-ups:', updateError);
-        return { error: updateError };
-      }
-
-      // Update local state
       setQuizState(prev => ({
         ...prev,
         powerUps: newPowerUps,
@@ -217,24 +231,16 @@ export function useQuiz() {
       console.error('Error using power-up:', error);
       return { error };
     }
-  };
+  }, [quizState]);
 
-  const pauseQuiz = async () => {
+  const pauseQuiz = useCallback(async () => {
     if (!quizState.session) return;
 
     try {
-      const { error } = await supabase
-        .from('quiz_sessions')
-        .update({
-          status: 'paused',
-          time_remaining: quizState.timeLeft,
-        })
-        .eq('id', quizState.session.id);
-
-      if (error) {
-        console.error('Error pausing quiz:', error);
-        return { error };
-      }
+      await updateDoc(doc(db, 'quiz_sessions', quizState.session.id), {
+        status: 'paused',
+        time_remaining: quizState.timeLeft,
+      });
 
       setQuizState(prev => ({
         ...prev,
@@ -246,42 +252,29 @@ export function useQuiz() {
       console.error('Error pausing quiz:', error);
       return { error };
     }
-  };
+  }, [quizState]);
 
-  const resumeQuiz = async (sessionId: string) => {
+  const resumeQuiz = useCallback(async (sessionId: string) => {
     if (!user) return { error: 'User not authenticated' };
 
     setQuizState(prev => ({ ...prev, loading: true }));
 
     try {
-      // Fetch session
-      const { data: session, error: sessionError } = await supabase
-        .from('quiz_sessions')
-        .select('*')
-        .eq('id', sessionId)
-        .eq('user_id', user.id)
-        .single();
+      const sessionRef = doc(db, 'quiz_sessions', sessionId);
+      const sessionDoc = await getDoc(sessionRef);
 
-      if (sessionError) {
-        console.error('Error fetching session:', sessionError);
-        return { error: sessionError };
+      if (!sessionDoc.exists()) {
+        return { error: 'Session not found' };
       }
+      const session = { id: sessionDoc.id, ...sessionDoc.data() } as QuizSession;
 
-      // Fetch questions
-      const { data: questions, error: questionsError } = await supabase
-        .from('quiz_questions')
-        .select('*')
-        .in('id', session.questions);
+      const questionsQuery = query(collection(db, 'quiz_questions'), where('id', 'in', session.questions));
+      const questionsSnapshot = await getDocs(questionsQuery);
+      const questions = questionsSnapshot.docs.map(d => ({ id: d.id, ...d.data() })) as QuizQuestion[];
 
-      if (questionsError) {
-        console.error('Error fetching questions:', questionsError);
-        return { error: questionsError };
-      }
-
-      // Order questions according to session
       const orderedQuestions = session.questions.map((id: string) => 
         questions.find(q => q.id === id)
-      ).filter(Boolean);
+      ).filter(Boolean) as QuizQuestion[];
 
       setQuizState(prev => ({
         ...prev,
@@ -303,13 +296,13 @@ export function useQuiz() {
       setQuizState(prev => ({ ...prev, loading: false }));
       return { error };
     }
-  };
+  }, [user]);
 
-  const updateTimer = (timeLeft: number) => {
+  const updateTimer = useCallback((timeLeft: number) => {
     setQuizState(prev => ({ ...prev, timeLeft }));
-  };
+  }, []);
 
-  const getQuizStats = () => {
+  const getQuizStats = useCallback(() => {
     if (!quizState.session) return null;
 
     return {
@@ -320,7 +313,7 @@ export function useQuiz() {
       progress: ((quizState.session.current_question) / quizState.questions.length) * 100,
       timeLeft: quizState.timeLeft,
     };
-  };
+  }, [quizState]);
 
   return {
     quizState,

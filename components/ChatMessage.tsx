@@ -1,22 +1,35 @@
+// src/components/ChatMessage.js
+
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { Bot, User, Copy, Share } from 'lucide-react-native';
-import { Colors } from '@/constants/DesignTokens';
 import * as Clipboard from 'expo-clipboard';
-import { Alert } from 'react-native';
+// Importing Colors as it's used in the original code, but not directly in the component's logic
+import { Colors } from '@/constants/DesignTokens'; 
+
+// Helper function to handle Firestore Timestamp objects and regular Dates
+const convertTimestampToDate = (timestamp: Date | { toDate: () => Date }): Date => {
+  if (timestamp instanceof Date) {
+    return timestamp;
+  }
+  return timestamp.toDate();
+};
 
 interface ChatMessageProps {
   message: {
     id: string;
     text: string;
     isUser: boolean;
-    timestamp: Date;
+    timestamp: Date | { toDate: () => Date }; // Updated type to handle Firestore Timestamps
   };
   onCopy?: (text: string) => void;
   onShare?: (text: string) => void;
 }
 
 export function ChatMessage({ message, onCopy, onShare }: ChatMessageProps) {
+  // Convert the timestamp to a Date object at the beginning of the component
+  const timestamp = convertTimestampToDate(message.timestamp);
+
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
@@ -32,6 +45,9 @@ export function ChatMessage({ message, onCopy, onShare }: ChatMessageProps) {
   };
 
   const handleShare = () => {
+    // You'd typically use `Share.share` from `react-native` or `expo-sharing` here.
+    // The current implementation is a placeholder.
+    Alert.alert('Share', `Sharing message: "${message.text}"`);
     onShare?.(message.text);
   };
 
@@ -62,7 +78,7 @@ export function ChatMessage({ message, onCopy, onShare }: ChatMessageProps) {
             styles.messageTime,
             message.isUser ? styles.userMessageTime : styles.aiMessageTime
           ]}>
-            {formatTime(message.timestamp)}
+            {formatTime(timestamp)}
           </Text>
           
           {!message.isUser && (

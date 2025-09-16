@@ -1,9 +1,44 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
-import { supabase } from '@/lib/supabase';
-import type { MoodEntry, MoodInfluence, MoodAnalytics } from '@/lib/supabase';
+import { Platform } from 'react-native';
+import { db } from '@/lib/firebase';
 import { useAuth } from './useAuth';
-import { useProfile } from './useProfile';
+import {
+  collection,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  query,
+  where,
+  getDocs,
+  onSnapshot,
+  orderBy,
+  runTransaction,
+} from 'firebase/firestore';
+import { emitMoodEntrySaved } from '@/lib/eventEmitter';
 
+// --- Firebase Data Models ---
+export interface MoodEntry {
+  id: string; // Firebase doc id
+  user_id: string;
+  entry_date: string;
+  mood_type: string;
+  intensity_rating: number;
+  emoji: string;
+  note: string | null;
+  created_at: number;
+  updated_at: number;
+  mood_id?: string; // Corrected: Added mood_id to the interface
+}
+
+export interface MoodInfluence {
+  id: string; // Firebase doc id
+  influence_name: string;
+  influence_category: string;
+}
+
+// --- Component-specific types ---
 export interface MoodOption {
   emoji: string;
   label: string;
@@ -14,6 +49,7 @@ export interface MoodOption {
 export interface WeeklyMoodData {
   date: string;
   mood: string | null;
+  mood_id: string | null;
   rating: number | null;
   emoji: string | null;
 }
@@ -29,7 +65,6 @@ export interface MoodStats {
 
 export function useMoodTracker() {
   const { user } = useAuth();
-  const { profile } = useProfile();
   const [moodEntries, setMoodEntries] = useState<MoodEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -47,309 +82,178 @@ export function useMoodTracker() {
     { emoji: '😤', label: 'Stressed', color: '#DC2626', value: 4 },
   ];
 
+  // Real-time listener for mood entries
   useEffect(() => {
-    if (user && profile) {
-      fetchMoodEntries();
-    } else {
+    if (!user) {
       setMoodEntries([]);
       setLoading(false);
-    }
-  }, [user, profile]);
-
-  const fetchMoodEntries = async () => {
-    if (!user || !profile) {
-      console.log('🔴 MOOD: No user or profile found, skipping fetch');
       return;
     }
 
-    try {
-      setLoading(true);
-      console.log('🔴 MOOD: Starting fetchMoodEntries for user:', user.id, 'profile:', profile.id);
-      console.log('🔴 MOOD: User object:', { id: user.id, uid: user.uid, email: user.email });
-      
-      // Fetch last 90 days of mood data
-      const ninetyDaysAgo = new Date();
-      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-      const dateFilter = ninetyDaysAgo.toISOString().split('T')[0];
-      
-      console.log('🔴 MOOD: Fetching data from', dateFilter, 'for user_id:', profile.id);
+    setLoading(true);
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+    const dateFilter = ninetyDaysAgo.toISOString().split('T')[0];
 
-      // First, try to fetch from mood_entries table (primary source)
-      console.log('🔴 MOOD: Trying mood_entries table first');
-      const { data: moodEntriesData, error: moodEntriesError } = await supabase
-        .from('mood_entries')
-        .select('*')
-        .eq('user_id', profile.id)
-        .gte('entry_date', dateFilter)
-        .order('entry_date', { ascending: false });
+    const q = query(
+      collection(db, 'mood_entries'),
+      where('user_id', '==', user.uid),
+      where('entry_date', '>=', dateFilter),
+      orderBy('entry_date', 'desc')
+    );
 
-      console.log('🔴 MOOD: mood_entries query result:', {
-        data: moodEntriesData,
-        error: moodEntriesError,
-        count: moodEntriesData?.length,
-        profileId: profile.id
-      });
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      const fetchedEntries: MoodEntry[] = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as MoodEntry[];
 
-      if (!moodEntriesError && moodEntriesData && moodEntriesData.length > 0) {
-        setMoodEntries(moodEntriesData);
-        console.log('🔴 MOOD: Final mood_entries count:', moodEntriesData.length);
-      } else {
-        // Fallback to daily_activities table for legacy data
+      if (fetchedEntries.length === 0) {
         console.log('🔴 MOOD: No data in mood_entries, trying daily_activities table');
-        const dailyActivitiesResult = await supabase
-          .from('daily_activities')
-          .select('*')
-          .eq('user_id', profile.id)
-          .gte('activity_date', dateFilter)
-          .order('activity_date', { ascending: false });
-        
-        console.log('🔴 MOOD: daily_activities query result:', {
-          data: dailyActivitiesResult.data,
-          error: dailyActivitiesResult.error,
-          count: dailyActivitiesResult.data?.length
-        });
-        
-        if (!dailyActivitiesResult.error && dailyActivitiesResult.data && dailyActivitiesResult.data.length > 0) {
-          // Convert daily_activities to mood entries
-          const convertedEntries: MoodEntry[] = dailyActivitiesResult.data
-            .filter(activity => {
-              console.log('🔴 MOOD: Processing activity:', activity);
-              return activity.mood_rating && activity.mood_rating > 0;
-            })
-            .map(activity => {
-              const moodData = moodOptions.find(m =>
-                Math.abs(m.value - activity.mood_rating) <= 1
-              ) || moodOptions[2]; // Default to neutral
+        await fallbackToDailyActivities(user.uid, dateFilter);
+      } else {
+        setMoodEntries(fetchedEntries);
+      }
 
-              const converted = {
-                id: activity.id,
-                user_id: activity.user_id,
-                entry_date: activity.activity_date,
-                mood_id: moodData.label,
-                mood_type: moodData.label,
-                intensity_rating: activity.mood_rating,
-                emoji: moodData.emoji,
-                note: null,
-                created_at: activity.created_at,
-                updated_at: activity.updated_at,
-              };
-              
-              console.log('🔴 MOOD: Converted activity to mood entry:', converted);
-              return converted;
-            });
-          
-          setMoodEntries(convertedEntries);
-          console.log('🔴 MOOD: Final converted entries count:', convertedEntries.length);
-        } else {
-          // Set empty entries if both queries fail
-          setMoodEntries([]);
-          console.log('🔴 MOOD: No mood data found in either table');
-        }
+      setLoading(false);
+    }, (error) => {
+      console.error('🔴 MOOD: Real-time update failed:', error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // Fallback function to migrate data from daily_activities
+  const fallbackToDailyActivities = useCallback(async (userId: string, dateFilter: string) => {
+    try {
+      const dailyActivitiesQuery = query(
+        collection(db, 'daily_activities'),
+        where('user_id', '==', userId),
+        where('activity_date', '>=', dateFilter),
+        where('activity_date', '<=', new Date().toISOString().split('T')[0]),
+        orderBy('activity_date', 'desc')
+      );
+
+      const dailyActivitiesSnapshot = await getDocs(dailyActivitiesQuery);
+      
+      if (!dailyActivitiesSnapshot.empty) {
+        const convertedEntries: MoodEntry[] = dailyActivitiesSnapshot.docs
+          .filter(doc => doc.data().mood_rating && doc.data().mood_rating > 0)
+          .map(doc => {
+            const activity = doc.data();
+            const moodData = moodOptions.find(m =>
+              Math.abs(m.value - activity.mood_rating) <= 1
+            ) || moodOptions[2];
+
+            return {
+              id: doc.id,
+              user_id: userId,
+              entry_date: activity.activity_date,
+              mood_id: moodData.label, // Corrected: Mapped mood_id from moodData.label
+              mood_type: moodData.label,
+              intensity_rating: activity.mood_rating,
+              emoji: moodData.emoji,
+              note: null,
+              created_at: new Date(activity.created_at).getTime(),
+              updated_at: new Date(activity.updated_at).getTime(),
+            };
+          });
+        setMoodEntries(convertedEntries);
+      } else {
+        setMoodEntries([]);
       }
     } catch (error) {
-      console.error('🔴 MOOD: Error fetching mood entries:', error);
+      console.error('Error in fallback migration:', error);
       setMoodEntries([]);
-    } finally {
-      setLoading(false);
-      console.log('🔴 MOOD: fetchMoodEntries completed');
     }
-  };
+  }, []);
 
-  const saveMoodEntry = async (
+  const saveMoodEntry = useCallback(async (
     mood: string,
     rating: number,
     influences: string[],
     note: string
   ): Promise<{ data: MoodEntry | null; error: any }> => {
-    console.log('saveMoodEntry called with:', { mood, rating, influences, note });
-    console.log('User:', user);
-    console.log('Profile:', profile);
-    
-    if (!user || !profile) {
-      console.log('No user or profile, returning error');
-      return { data: null, error: 'User not authenticated or profile not found' };
+    if (!user) {
+      return { data: null, error: 'User not authenticated' };
     }
 
     try {
       setSaving(true);
-      console.log('Setting saving to true');
-      
+      const today = new Date().toISOString().split('T')[0];
       const moodData = moodOptions.find(m => m.label === mood);
       if (!moodData) {
-        console.log('Invalid mood selected:', mood);
         return { data: null, error: 'Invalid mood selected' };
       }
-      console.log('Mood data found:', moodData);
 
-      const today = new Date().toISOString().split('T')[0];
-      console.log('Today:', today);
+      const moodDocRef = doc(db, 'mood_entries', `${user.uid}_${today}`);
 
-      // Check if entry already exists for today
-      const existingEntry = moodEntries.find(entry => entry.entry_date === today);
-      console.log('Existing entry:', existingEntry);
-      
-      let moodEntry: MoodEntry;
-      
-      if (existingEntry) {
-        console.log('Updating existing entry');
-        // Update existing entry
-        const { data, error } = await supabase
-          .from('mood_entries')
-          .update({
-            mood_type: mood,
-            intensity_rating: rating,
-            emoji: moodData.emoji,
-            note: note || null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', existingEntry.id)
-          .select()
-          .single();
+      const result = await runTransaction(db, async (transaction) => {
+        const docSnap = await transaction.get(moodDocRef);
 
-        if (error) {
-          console.error('Error updating entry:', error);
-          // Fallback to daily_activities table if mood_entries doesn't exist
-          console.log('Falling back to daily_activities table for update');
-          const fallbackResult = await supabase
-            .from('daily_activities')
-            .upsert({
-              user_id: profile.id,
-              activity_date: today,
-              mood_rating: rating,
-            }, {
-              onConflict: 'user_id,activity_date'
-            })
-            .select()
-            .single();
-          
-          if (fallbackResult.error) {
-            console.error('Fallback update also failed:', fallbackResult.error);
-            throw fallbackResult.error;
-          }
-          
-          // Create a mock mood entry from the fallback data
-          moodEntry = {
-            id: fallbackResult.data.id,
-            user_id: profile.id,
-            entry_date: today,
-            mood_id: mood,
-            mood_type: mood,
-            intensity_rating: rating,
-            emoji: moodData.emoji,
-            note: note || null,
-            created_at: fallbackResult.data.created_at,
-            updated_at: fallbackResult.data.updated_at,
-          };
-          console.log('Fallback entry updated:', moodEntry);
+        const entryData = {
+          user_id: user.uid,
+          entry_date: today,
+          mood_type: mood,
+          mood_id: moodData.label, // Corrected: Added mood_id to the data object
+          intensity_rating: rating,
+          emoji: moodData.emoji,
+          note: note || null,
+        };
+
+        if (docSnap.exists()) {
+          transaction.update(moodDocRef, {
+            ...entryData,
+            updated_at: Date.now(),
+          });
+          return { id: docSnap.id, ...entryData, created_at: docSnap.data().created_at, updated_at: Date.now() };
         } else {
-          moodEntry = data;
-          console.log('Entry updated:', moodEntry);
+          transaction.set(moodDocRef, {
+            ...entryData,
+            created_at: Date.now(),
+            updated_at: Date.now(),
+          });
+          return { id: moodDocRef.id, ...entryData, created_at: Date.now(), updated_at: Date.now() };
         }
-      } else {
-        console.log('Creating new entry');
-        // Create new entry
-        const { data, error } = await supabase
-          .from('mood_entries')
-          .insert({
-            user_id: profile.id,
-            entry_date: today,
-            mood_type: mood,
-            intensity_rating: rating,
-            emoji: moodData.emoji,
-            note: note || null,
-          })
-          .select()
-          .single();
-
-        if (error) {
-          console.error('Error creating entry:', error);
-          // Fallback to daily_activities table if mood_entries doesn't exist
-          console.log('Falling back to daily_activities table');
-          const fallbackResult = await supabase
-            .from('daily_activities')
-            .upsert({
-              user_id: profile.id,
-              activity_date: today,
-              mood_rating: rating,
-            }, {
-              onConflict: 'user_id,activity_date'
-            })
-            .select()
-            .single();
-          
-          if (fallbackResult.error) {
-            console.error('Fallback also failed:', fallbackResult.error);
-            throw fallbackResult.error;
-          }
-          
-          // Create a mock mood entry from the fallback data
-          moodEntry = {
-            id: fallbackResult.data.id,
-            user_id: profile.id,
-            entry_date: today,
-            mood_id: mood,
-            mood_type: mood,
-            intensity_rating: rating,
-            emoji: moodData.emoji,
-            note: note || null,
-            created_at: fallbackResult.data.created_at,
-            updated_at: fallbackResult.data.updated_at,
-          };
-          console.log('Fallback entry created:', moodEntry);
-        } else {
-          moodEntry = data;
-          console.log('Entry created:', moodEntry);
-        }
-      }
-
-      // Handle influences
-      if (moodEntry) {
-        console.log('Handling influences for entry:', moodEntry.id);
-        
-        // Delete existing influences for this entry
-        const deleteResult = await supabase
-          .from('mood_influences')
-          .delete()
-          .eq('mood_entry_id', moodEntry.id);
-        
-        console.log('Delete influences result:', deleteResult);
-
-        // Insert new influences
-        if (influences.length > 0) {
-          console.log('Inserting influences:', influences);
-          const influenceData = influences.map(influence => ({
-            mood_entry_id: moodEntry.id,
-            influence_name: influence,
-            influence_category: getInfluenceCategory(influence),
+      });
+      
+      if (result) {
+        await handleInfluences(result.id, influences);
+        emitMoodEntrySaved(result);
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('moodEntrySaved', { 
+            detail: { moodEntry: result, timestamp: Date.now() } 
           }));
-
-          const { error: influenceError } = await supabase
-            .from('mood_influences')
-            .insert(influenceData);
-
-          if (influenceError) {
-            console.error('Error saving influences:', influenceError);
-          } else {
-            console.log('Influences saved successfully');
-          }
         }
-
-        // Update local state
-        console.log('Updating local state');
-        setMoodEntries(prev => {
-          const filtered = prev.filter(e => e.entry_date !== today);
-          return [moodEntry, ...filtered];
-        });
       }
-
-      console.log('Returning success:', moodEntry);
-      return { data: moodEntry, error: null };
+      
+      return { data: result, error: null };
     } catch (error) {
       console.error('Error saving mood entry:', error);
       return { data: null, error };
     } finally {
-      console.log('Setting saving to false');
       setSaving(false);
+    }
+  }, [user, moodOptions]);
+
+  const handleInfluences = async (moodEntryId: string, influences: string[]) => {
+    const influencesCollectionRef = collection(db, 'mood_entries', moodEntryId, 'influences');
+    
+    const existingInfluences = await getDocs(influencesCollectionRef);
+    const deletePromises = existingInfluences.docs.map(docSnap => deleteDoc(doc(influencesCollectionRef, docSnap.id)));
+    await Promise.all(deletePromises);
+    
+    if (influences.length > 0) {
+      const insertPromises = influences.map(influence => {
+        const newInfluenceRef = doc(influencesCollectionRef);
+        return setDoc(newInfluenceRef, {
+          influence_name: influence,
+          influence_category: getInfluenceCategory(influence),
+          created_at: Date.now(),
+        });
+      });
+      await Promise.all(insertPromises);
     }
   };
 
@@ -371,6 +275,18 @@ export function useMoodTracker() {
     return 'other';
   };
 
+  const deleteMoodEntry = useCallback(async (entryId: string): Promise<{ error: any }> => {
+    if (!user) return { error: 'User not authenticated' };
+    try {
+      const moodDocRef = doc(db, 'mood_entries', entryId);
+      await deleteDoc(moodDocRef);
+      return { error: null };
+    } catch (error) {
+      console.error('Error deleting mood entry:', error);
+      return { error };
+    }
+  }, [user]);
+
   const getTodaysMood = useCallback((): MoodEntry | null => {
     const today = new Date().toISOString().split('T')[0];
     return moodEntries.find(entry => entry.entry_date === today) || null;
@@ -379,12 +295,9 @@ export function useMoodTracker() {
   const getWeeklyMoodData = useCallback((): WeeklyMoodData[] => {
     const weekData: WeeklyMoodData[] = [];
     const today = new Date();
-    
-    // Get the start of the current week (Sunday)
     const startOfWeek = new Date(today);
-    startOfWeek.setDate(today.getDate() - today.getDay()); // Sunday
+    startOfWeek.setDate(today.getDate() - today.getDay());
     
-    // Get data for each day of the week (Sunday to Saturday)
     for (let i = 0; i < 7; i++) {
       const date = new Date(startOfWeek);
       date.setDate(startOfWeek.getDate() + i);
@@ -394,30 +307,20 @@ export function useMoodTracker() {
       weekData.push({
         date: dateString,
         mood: entry?.mood_type || null,
+        mood_id: entry?.mood_id || null,
         rating: entry?.intensity_rating || null,
         emoji: entry?.emoji || null,
       });
     }
-    
     return weekData;
   }, [moodEntries]);
 
   const getAverageWeeklyMood = useCallback((): number => {
     const weekData = getWeeklyMoodData();
     const validRatings = weekData.filter(d => d.rating !== null).map(d => d.rating!);
-    
-    console.log('🔴 MOOD CALC: Week data for average calculation:', weekData);
-    console.log('🔴 MOOD CALC: Valid ratings:', validRatings);
-    
-    if (validRatings.length === 0) {
-      console.log('🔴 MOOD CALC: No valid ratings, returning 0');
-      return 0;
-    }
-    
+    if (validRatings.length === 0) return 0;
     const sum = validRatings.reduce((acc, rating) => acc + rating, 0);
     const average = Math.round((sum / validRatings.length) * 10) / 10;
-    
-    console.log('🔴 MOOD CALC: Sum:', sum, 'Count:', validRatings.length, 'Average:', average);
     return average;
   }, [getWeeklyMoodData]);
 
@@ -426,13 +329,11 @@ export function useMoodTracker() {
     const sortedEntries = [...moodEntries].sort((a, b) => 
       new Date(b.entry_date).getTime() - new Date(a.entry_date).getTime()
     );
-
     const today = new Date().toISOString().split('T')[0];
     let currentDate = new Date(today);
-
+    
     for (const entry of sortedEntries) {
       const entryDate = currentDate.toISOString().split('T')[0];
-      
       if (entry.entry_date === entryDate) {
         streak++;
         currentDate.setDate(currentDate.getDate() - 1);
@@ -440,21 +341,17 @@ export function useMoodTracker() {
         break;
       }
     }
-
     return streak;
   }, [moodEntries]);
 
   const getMonthlyTrend = useCallback((): MoodEntry[] => {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    
-    return moodEntries.filter(entry => 
-      new Date(entry.entry_date) >= thirtyDaysAgo
-    );
+    return moodEntries.filter(entry => new Date(entry.entry_date) >= thirtyDaysAgo);
   }, [moodEntries]);
 
   const moodStats: MoodStats = useMemo(() => {
-    const stats = {
+    return {
       totalEntries: moodEntries.length,
       currentStreak: getCurrentStreak(),
       averageWeekly: getAverageWeeklyMood(),
@@ -462,45 +359,11 @@ export function useMoodTracker() {
       weeklyData: getWeeklyMoodData(),
       monthlyTrend: getMonthlyTrend(),
     };
-    
-    console.log('🔴 MOOD STATS: Final calculated stats:', {
-      totalEntries: stats.totalEntries,
-      currentStreak: stats.currentStreak,
-      averageWeekly: stats.averageWeekly,
-      todaysMood: stats.todaysMood?.mood_type,
-      weeklyDataCount: stats.weeklyData.length,
-      monthlyTrendCount: stats.monthlyTrend.length,
-    });
-    
-    return stats;
   }, [moodEntries, getCurrentStreak, getAverageWeeklyMood, getTodaysMood, getWeeklyMoodData, getMonthlyTrend]);
 
-  const deleteMoodEntry = async (entryId: string): Promise<{ error: any }> => {
-    if (!user) return { error: 'User not authenticated' };
-
-    try {
-      const { error } = await supabase
-        .from('mood_entries')
-        .delete()
-        .eq('id', entryId)
-        .eq('user_id', user.id);
-
-      if (error) throw error;
-
-      // Update local state
-      setMoodEntries(prev => prev.filter(entry => entry.id !== entryId));
-      
-      return { error: null };
-    } catch (error) {
-      console.error('Error deleting mood entry:', error);
-      return { error };
-    }
-  };
-
-  const getMoodInsights = () => {
+  const getMoodInsights = useCallback(() => {
     const monthlyData = getMonthlyTrend();
     
-    // Most common mood
     const moodCounts = monthlyData.reduce((acc, entry) => {
       acc[entry.mood_type] = (acc[entry.mood_type] || 0) + 1;
       return acc;
@@ -509,12 +372,10 @@ export function useMoodTracker() {
     const mostCommonMood = Object.entries(moodCounts)
       .sort(([,a], [,b]) => b - a)[0]?.[0] || 'Neutral';
     
-    // Average intensity
     const avgIntensity = monthlyData.length > 0 
       ? Math.round(monthlyData.reduce((sum, entry) => sum + entry.intensity_rating, 0) / monthlyData.length * 10) / 10
       : 0;
     
-    // Mood improvement trend
     const recentEntries = monthlyData.slice(0, 7);
     const olderEntries = monthlyData.slice(-7);
     
@@ -534,7 +395,37 @@ export function useMoodTracker() {
       isImproving,
       improvementPercentage: olderAvg > 0 ? Math.round(((recentAvg - olderAvg) / olderAvg) * 100) : 0,
     };
-  };
+  }, [getMonthlyTrend]);
+
+  const refetch = useCallback(() => {
+    if (user) {
+      setLoading(true);
+      const ninetyDaysAgo = new Date();
+      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+      const dateFilter = ninetyDaysAgo.toISOString().split('T')[0];
+
+      const q = query(
+        collection(db, 'mood_entries'),
+        where('user_id', '==', user.uid),
+        where('entry_date', '>=', dateFilter),
+        orderBy('entry_date', 'desc')
+      );
+      
+      getDocs(q).then((snapshot) => {
+        const fetchedEntries: MoodEntry[] = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+        })) as MoodEntry[];
+        setMoodEntries(fetchedEntries);
+        setLoading(false);
+      }).catch(err => {
+        console.error('Manual fetch failed:', err);
+        setLoading(false);
+      });
+    }
+  }, [user]);
+
+  const addMoodEntryToState = useCallback(() => {}, []);
 
   return {
     moodEntries,
@@ -545,6 +436,7 @@ export function useMoodTracker() {
     deleteMoodEntry,
     moodStats,
     getMoodInsights,
-    refetch: fetchMoodEntries,
+    refetch,
+    addMoodEntryToState,
   };
 }

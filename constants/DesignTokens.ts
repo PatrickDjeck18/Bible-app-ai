@@ -4,34 +4,34 @@
  */
 
 export const Colors = {
-  // Primary Brand Colors - Modern Purple Gradient
+  // Primary Brand Colors - Minimalist Gray with Accent
   primary: {
-    50: '#F8F7FF',
-    100: '#EDEAFF',
-    200: '#DDD7FF',
-    300: '#C4B8FF',
-    400: '#A792FF',
-    500: '#8B5CF6', // Primary
-    600: '#7C3AED',
-    700: '#6D28D9',
-    800: '#5B21B6',
-    900: '#4C1D95',
-    950: '#2E1065',
+    50: '#F9F9F9',
+    100: '#F2F2F2',
+    200: '#E5E5E5',
+    300: '#D8D8D8',
+    400: '#CBCBCB',
+    500: '#AFAFAF', // Primary
+    600: '#939393',
+    700: '#767676',
+    800: '#5A5A5A',
+    900: '#3D3D3D',
+    950: '#212121',
   },
 
-  // Secondary Colors - Modern Teal
+  // Secondary Colors - Accent Color (Light Blue)
   secondary: {
-    50: '#F0FDFA',
-    100: '#CCFBF1',
-    200: '#99F6E4',
-    300: '#5EEAD4',
-    400: '#2DD4BF',
-    500: '#14B8A6', // Secondary
-    600: '#0D9488',
-    700: '#0F766E',
-    800: '#115E59',
-    900: '#134E4A',
-    950: '#042F2E',
+    50: '#E1F5FE',
+    100: '#B3E5FC',
+    200: '#81D4FA',
+    300: '#4FC3F7',
+    400: '#29B6F6',
+    500: '#03A9F4', // Secondary
+    600: '#039BE5',
+    700: '#0288D1',
+    800: '#0277BD',
+    900: '#01579B',
+    950: '#01427A',
   },
 
   // Neutral Colors - Warm Grays
@@ -95,8 +95,8 @@ export const Colors = {
 
   // Modern Gradients
   gradients: {
-    primary: ['#8B5CF6', '#6366F1', '#3B82F6'] as const,
-    secondary: ['#14B8A6', '#06B6D4', '#0EA5E9'] as const,
+    primary: ['#AFAFAF', '#939393', '#767676'] as const,
+    secondary: ['#03A9F4', '#039BE5', '#0288D1'] as const,
     warm: ['#F59E0B', '#EF4444', '#EC4899'] as const,
     sunset: ['#F97316', '#EF4444', '#EC4899'] as const,
     ocean: ['#0EA5E9', '#06B6D4', '#14B8A6'] as const,
@@ -207,6 +207,7 @@ export const Typography = {
 
   // Line Heights
   lineHeights: {
+    base: 1,
     tight: 1.2,
     normal: 1.4,
     relaxed: 1.6,

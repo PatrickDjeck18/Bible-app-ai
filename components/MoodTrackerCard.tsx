@@ -8,6 +8,7 @@ import {
   Animated,
   ActivityIndicator,
   ScrollView,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { 
@@ -24,6 +25,7 @@ import {
 import { Colors, Typography, Spacing, BorderRadius, Shadows } from '@/constants/DesignTokens';
 import { useMoodTracker } from '@/hooks/useMoodTracker';
 import { router } from 'expo-router';
+import { onMoodEntrySaved, offMoodEntrySaved } from '@/lib/eventEmitter';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -40,57 +42,127 @@ export default function MoodTrackerCard({ onPress, compact = false }: MoodTracke
 
   const todaysMood = moodStats.todaysMood;
   const todayDate = new Date().toISOString().split('T')[0];
-  const weeklyMoods = moodStats.weeklyData.map((d: { date: string; mood: string | null; rating: number | null; emoji: string | null }) => ({
+  
+  const weeklyMoods = moodStats.weeklyData.map((d: { date: string; mood: string | null; mood_id: string | null; rating: number | null; emoji: string | null }) => ({
     ...d,
     day: new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' }),
     isToday: d.date === todayDate
   }));
+  
 
   // Listen for mood entry saved events and refresh data
   useEffect(() => {
-    const handleMoodSaved = async () => {
-      console.log('Mood entry saved event received, refreshing mood data...');
+    const handleMoodSaved = async (data?: any) => {
       setRefreshing(true);
       await refetch();
       setRefreshing(false);
     };
 
-    if (typeof window !== 'undefined') {
+    // Use cross-platform event emitter
+    onMoodEntrySaved(handleMoodSaved);
+    
+    // Also listen to web events for web platform compatibility
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.addEventListener('moodEntrySaved', handleMoodSaved);
-      return () => {
-        window.removeEventListener('moodEntrySaved', handleMoodSaved);
-      };
     }
+    
+    return () => {
+      offMoodEntrySaved(handleMoodSaved);
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.removeEventListener('moodEntrySaved', handleMoodSaved);
+      }
+    };
   }, [refetch]);
+
+  // Additional effect to refresh data when component becomes visible
+  // This helps with mobile platforms where events might not work
+  useEffect(() => {
+    const refreshData = async () => {
+      if (!loading) {
+        await refetch();
+      }
+    };
+
+    // Refresh data when component mounts
+    refreshData();
+  }, []);
+
+  // Refresh data when the component comes into focus (for mobile navigation)
+  useEffect(() => {
+    const handleFocus = () => {
+      if (!loading) {
+        refetch();
+      }
+    };
+
+    // This will be called when the component comes into focus
+    // You can add navigation focus listeners here if needed
+    return () => {
+      // Cleanup if needed
+    };
+  }, [refetch, loading]);
 
   // Helper functions
   const getMoodGradient = (moodId: string | null | undefined) => {
     return Colors.gradients.spiritualLight;
   };
 
-  const getMoodDisplayName = (moodType: string | null) => {
-    if (!moodType) return '';
+  const getMoodDisplayName = (moodId: string | null, moodType: string | null) => {
+    if (!moodId && !moodType) return '';
     
-    const moodNameMap: { [key: string]: string } = {
-      'Happy': 'Blessed',
-      'Joyful': 'Joyful',
-      'Peaceful': 'Peaceful',
-      'Calm': 'Serene',
-      'Excited': 'Energized',
-      'Grateful': 'Grateful',
-      'Sad': 'Reflective',
-      'Worried': 'Seeking',
-      'Anxious': 'Prayerful',
-      'Stressed': 'Trusting',
-      'Neutral': 'Steady',
-      'Loved': 'Cherished',
-      'Faithful': 'Faithful',
-      'Connected': 'Connected',
-      'Blessed': 'Blessed',
-      'Inspired': 'Inspired'
-    };
+    // If we have mood_id, derive the name from it
+    if (moodId) {
+      const moodData = getMoodData(moodId);
+      if (moodData && moodData.label) {
+        // Extract the text part after the emoji
+        const parts = moodData.label.split(' ');
+        return parts.slice(1).join(' ');
+      }
+    }
     
-    return moodNameMap[moodType] || moodType;
+    // Fallback to mood_type mapping
+    if (moodType) {
+      const moodNameMap: { [key: string]: string } = {
+        'Happy': 'Happy',
+        'Joyful': 'Joyful',
+        'Blessed': 'Blessed',
+        'Grateful': 'Grateful',
+        'Excited': 'Excited',
+        'Loved': 'Loved',
+        'Proud': 'Proud',
+        'Peaceful': 'Peaceful',
+        'Calm': 'Calm',
+        'Content': 'Content',
+        'Prayerful': 'Prayerful',
+        'Motivated': 'Motivated',
+        'Focused': 'Focused',
+        'Creative': 'Creative',
+        'Inspired': 'Inspired',
+        'Accomplished': 'Accomplished',
+        'Sad': 'Sad',
+        'Anxious': 'Anxious',
+        'Stressed': 'Stressed',
+        'Angry': 'Angry',
+        'Frustrated': 'Frustrated',
+        'Tired': 'Tired',
+        'Lonely': 'Lonely',
+        'Confused': 'Confused',
+        'Fearful': 'Fearful',
+        'Curious': 'Curious',
+        'Surprised': 'Surprised',
+        'Hopeful': 'Hopeful',
+        'Connected': 'Connected',
+        'Faithful': 'Faithful',
+        'Healthy': 'Healthy',
+        'Rested': 'Rested',
+        'Balanced': 'Balanced',
+        'Neutral': 'Neutral',
+        'Worried': 'Worried'
+      };
+      return moodNameMap[moodType] || moodType;
+    }
+    
+    return '';
   };
 
   const getMoodData = (moodId: string) => {
@@ -232,27 +304,39 @@ export default function MoodTrackerCard({ onPress, compact = false }: MoodTracke
         <View style={styles.header}>
             <View style={styles.headerLeft}>
               <View style={styles.iconContainer}>
-                <Smile size={compact ? 20 : 24} color={Colors.primary[600]} />
+                {todaysMood?.emoji ? (
+                  <Text style={styles.moodEmoji}>{todaysMood.emoji}</Text>
+                ) : (
+                  <Smile size={compact ? 20 : 24} color={Colors.primary[600]} />
+                )}
               </View>
               <View>
-                <Text style={styles.title}>My Mood</Text>
-                <Text style={styles.subtitle}>{getMoodMessage(todaysMood?.intensity_rating)}</Text>
+                <Text style={styles.title}>Today's Mood</Text>
+                <Text style={styles.subtitle}>
+                 {todaysMood ? 
+    `${getMoodDisplayName(todaysMood.mood_id ?? null, todaysMood.mood_type)} • ${getMoodMessage(todaysMood.intensity_rating)}` :
+    'Track your mood today'
+}
+                </Text>
+                {todaysMood?.created_at && (
+                  <Text style={styles.moodTime}>
+                    Recorded at {new Date(todaysMood.created_at).toLocaleTimeString('en-US', { 
+                      hour: 'numeric', 
+                      minute: '2-digit',
+                      hour12: true 
+                    })}
+                  </Text>
+                )}
               </View>
             </View>
             
             <View style={styles.headerRight}>
-              {todaysMood?.intensity_rating ? (
-                <View style={styles.ratingBadge}>
-                  <Text style={styles.ratingText}>{todaysMood.intensity_rating}/10</Text>
-                </View>
-              ) : (
-                <TouchableOpacity 
-                  style={styles.addButton}
-                  onPress={() => router.push('/(tabs)/mood-tracker')}
-                >
-                  <Plus size={16} color={Colors.primary[600]} />
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity 
+                style={styles.addButton}
+                onPress={() => router.push('/(tabs)/mood-tracker')}
+              >
+                <Plus size={16} color={Colors.primary[600]} />
+              </TouchableOpacity>
             </View>
         </View>
 
@@ -290,20 +374,6 @@ export default function MoodTrackerCard({ onPress, compact = false }: MoodTracke
             <View style={styles.weeklyBars}>
               {weeklyMoods.map((mood: any, index: number) => (
                 <View key={index} style={styles.weeklyBarContainer}>
-                  {/* Regular bar for all days (removed circular highlight for today) */}
-                  <LinearGradient
-                    colors={mood.rating ?
-                      (mood.rating >= 6 ? [Colors.success[400], Colors.success[500]] :
-                       mood.rating >= 4 ? [Colors.warning[400], Colors.warning[500]] :
-                       [Colors.error[400], Colors.error[500]]) :
-                      [Colors.neutral[200], Colors.neutral[300]]}
-                    style={[
-                      styles.weeklyBar,
-                      { height: mood.rating ? `${mood.rating * 10}%` : '20%' }
-                    ]}
-                    start={{ x: 0, y: 1 }}
-                    end={{ x: 0, y: 0 }}
-                  />
                   <Text style={[
                     styles.weeklyDay,
                     mood.isToday && styles.todayDay
@@ -317,7 +387,7 @@ export default function MoodTrackerCard({ onPress, compact = false }: MoodTracke
                       <Text style={[
                         styles.moodName,
                         mood.isToday && styles.todayMoodName
-                      ]}>{getMoodDisplayName(mood.mood)}</Text>
+                      ]}>{getMoodDisplayName(mood.mood_id, mood.mood)}</Text>
                     </View>
                   )}
                 </View>
@@ -420,17 +490,6 @@ const styles = StyleSheet.create({
   headerRight: {
     alignItems: 'flex-end',
   },
-  ratingBadge: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    borderRadius: BorderRadius.full,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  ratingText: {
-    fontSize: Typography.sizes.sm,
-    fontWeight: Typography.weights.bold,
-    color: 'white',
-  },
   addButton: {
     width: 32,
     height: 32,
@@ -438,6 +497,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  moodEmoji: {
+    fontSize: 24,
+    textAlign: 'center',
+  },
+  moodTime: {
+    fontSize: Typography.sizes.xs,
+    color: Colors.neutral[700],
+    opacity: 0.8,
+    marginTop: Spacing.xs,
   },
   
   // Stats
@@ -482,18 +551,12 @@ const styles = StyleSheet.create({
   weeklyBars: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    alignItems: 'flex-end',
-    height: 60,
+    alignItems: 'center',
     marginBottom: Spacing.md,
   },
   weeklyBarContainer: {
     alignItems: 'center',
     gap: Spacing.xs,
-  },
-  weeklyBar: {
-    width: 8,
-    borderRadius: BorderRadius.full,
-    minHeight: 4,
   },
   weeklyDay: {
     fontSize: Typography.sizes.xs,

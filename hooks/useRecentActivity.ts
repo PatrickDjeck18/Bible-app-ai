@@ -1,5 +1,13 @@
-import { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useState, useEffect, useCallback } from 'react';
+import { db } from '@/lib/firebase';
+import {
+  collection,
+  query,
+  where,
+  orderBy,
+  limit,
+  getDocs,
+} from 'firebase/firestore';
 import { useAuth } from './useAuth';
 
 export interface RecentActivity {
@@ -18,187 +26,183 @@ export function useRecentActivity() {
   const [activities, setActivities] = useState<RecentActivity[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (user) {
-      fetchRecentActivities();
-    } else {
+  const fetchRecentActivities = useCallback(async () => {
+    if (!user) {
       setActivities([]);
       setLoading(false);
+      return;
     }
-  }, [user]);
-
-  const fetchRecentActivities = async () => {
-    if (!user) return;
 
     try {
       setLoading(true);
       const allActivities: RecentActivity[] = [];
-
-      // Fetch recent daily activities (last 7 days)
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      const sevenDaysAgoISO = sevenDaysAgo.toISOString();
+
+      // Helper function to fetch and transform data from a collection
+      const fetchAndTransform = async (
+        collectionName: string,
+        transformFn: (item: any) => RecentActivity,
+        orderByField = 'updated_at' 
+      ) => {
+        const q = query(
+          collection(db, collectionName),
+          where('user_id', '==', user.uid),
+          where('created_at', '>=', sevenDaysAgoISO),
+          orderBy(orderByField, 'desc'),
+          limit(5)
+        );
+
+        try {
+          const snapshot = await getDocs(q);
+          snapshot.forEach(doc => {
+            allActivities.push(transformFn({ id: doc.id, ...doc.data() }));
+          });
+        } catch (err) {
+          console.error(`Error fetching from ${collectionName}:`, err);
+        }
+      };
 
       // Bible reading activities
-      const { data: bibleActivities } = await supabase
-        .from('daily_activities')
-        .select('*')
-        .eq('user_id', user.id)
-        .gt('bible_reading_minutes', 0)
-        .gte('activity_date', sevenDaysAgo.toISOString().split('T')[0])
-        .order('updated_at', { ascending: false })
-        .limit(5);
-
-      if (bibleActivities) {
-        bibleActivities.forEach(activity => {
-          allActivities.push({
-            id: activity.id,
-            type: 'bible_reading',
-            title: 'Completed Bible reading',
-            description: `${activity.bible_reading_minutes} minutes`,
-            timestamp: activity.updated_at,
-            icon: '📖',
-            color: '#3B82F6',
-            route: '/(tabs)/bible'
-          });
+      const bibleQuery = query(
+        collection(db, 'daily_activities'),
+        where('user_id', '==', user.uid),
+        where('bible_reading_minutes', '>', 0),
+        where('activity_date', '>=', sevenDaysAgo.toISOString().split('T')[0]),
+        orderBy('bible_reading_minutes', 'desc'),
+        limit(5)
+      );
+      const bibleSnapshot = await getDocs(bibleQuery);
+      bibleSnapshot.forEach(doc => {
+        const activity = doc.data();
+        allActivities.push({
+          id: doc.id,
+          type: 'bible_reading',
+          title: 'Completed Bible reading',
+          description: `${activity.bible_reading_minutes} minutes`,
+          timestamp: activity.updated_at,
+          icon: '📖',
+          color: '#3B82F6',
+          route: '/(tabs)/bible',
         });
-      }
+      });
 
       // Prayer activities
-      const { data: prayerActivities } = await supabase
-        .from('daily_activities')
-        .select('*')
-        .eq('user_id', user.id)
-        .gt('prayer_minutes', 0)
-        .gte('activity_date', sevenDaysAgo.toISOString().split('T')[0])
-        .order('updated_at', { ascending: false })
-        .limit(5);
-
-      if (prayerActivities) {
-        prayerActivities.forEach(activity => {
-          allActivities.push({
-            id: activity.id,
-            type: 'prayer',
-            title: 'Completed prayer session',
-            description: `${activity.prayer_minutes} minutes`,
-            timestamp: activity.updated_at,
-            icon: '🙏',
-            color: '#EF4444',
-            route: '/(tabs)/prayer-tracker'
-          });
+      const prayerQuery = query(
+        collection(db, 'daily_activities'),
+        where('user_id', '==', user.uid),
+        where('prayer_minutes', '>', 0),
+        where('activity_date', '>=', sevenDaysAgo.toISOString().split('T')[0]),
+        orderBy('prayer_minutes', 'desc'),
+        limit(5)
+      );
+      const prayerSnapshot = await getDocs(prayerQuery);
+      prayerSnapshot.forEach(doc => {
+        const activity = doc.data();
+        allActivities.push({
+          id: doc.id,
+          type: 'prayer',
+          title: 'Completed prayer session',
+          description: `${activity.prayer_minutes} minutes`,
+          timestamp: activity.updated_at,
+          icon: '🙏',
+          color: '#EF4444',
+          route: '/(tabs)/prayer-tracker',
         });
-      }
+      });
 
       // Mood activities
-      const { data: moodActivities } = await supabase
-        .from('daily_activities')
-        .select('*')
-        .eq('user_id', user.id)
-        .not('mood_rating', 'is', null)
-        .gte('activity_date', sevenDaysAgo.toISOString().split('T')[0])
-        .order('updated_at', { ascending: false })
-        .limit(5);
-
-      if (moodActivities) {
-        moodActivities.forEach(activity => {
+      // We can't query for 'not null' directly, so we'll fetch recent activities and filter
+      const moodQuery = query(
+        collection(db, 'daily_activities'),
+        where('user_id', '==', user.uid),
+        where('activity_date', '>=', sevenDaysAgo.toISOString().split('T')[0]),
+        orderBy('updated_at', 'desc'),
+        limit(5)
+      );
+      const moodSnapshot = await getDocs(moodQuery);
+      moodSnapshot.forEach(doc => {
+        const activity = doc.data();
+        if (activity.mood_rating !== null) { // Filter on the client-side
           allActivities.push({
-            id: activity.id,
+            id: doc.id,
             type: 'mood',
             title: 'Updated mood tracker',
             description: `Rating: ${activity.mood_rating}/10`,
             timestamp: activity.updated_at,
             icon: '😊',
             color: '#10B981',
-            route: '/(tabs)/mood-tracker'
+            route: '/(tabs)/mood-tracker',
           });
-        });
-      }
+        }
+      });
 
-      // Recent prayers (new prayer requests)
-      const { data: recentPrayers } = await supabase
-        .from('prayers')
-        .select('*')
-        .eq('user_id', user.id)
-        .gte('created_at', sevenDaysAgo.toISOString())
-        .order('created_at', { ascending: false })
-        .limit(5);
-
-      if (recentPrayers) {
-        recentPrayers.forEach(prayer => {
-          allActivities.push({
-            id: prayer.id,
-            type: 'prayer',
-            title: 'Added new prayer request',
-            description: prayer.title,
-            timestamp: prayer.created_at,
-            icon: '🙏',
-            color: '#EF4444',
-            route: '/(tabs)/prayer-tracker'
-          });
-        });
-      }
+      // Recent prayers
+      await fetchAndTransform(
+        'prayers',
+        (prayer) => ({
+          id: prayer.id,
+          type: 'prayer',
+          title: 'Added new prayer request',
+          description: prayer.title,
+          timestamp: prayer.created_at,
+          icon: '🙏',
+          color: '#EF4444',
+          route: '/(tabs)/prayer-tracker',
+        }),
+        'created_at'
+      );
 
       // Recent notes
-      const { data: recentNotes } = await supabase
-        .from('notes')
-        .select('*')
-        .eq('user_id', user.id)
-        .gte('created_at', sevenDaysAgo.toISOString())
-        .order('created_at', { ascending: false })
-        .limit(5);
-
-      if (recentNotes) {
-        recentNotes.forEach(note => {
-          allActivities.push({
-            id: note.id,
-            type: 'note',
-            title: 'Added new note',
-            description: note.title || 'Untitled note',
-            timestamp: note.created_at,
-            icon: '📝',
-            color: '#8B5CF6',
-            route: '/note-taker'
-          });
-        });
-      }
+      await fetchAndTransform(
+        'notes',
+        (note) => ({
+          id: note.id,
+          type: 'note',
+          title: 'Added new note',
+          description: note.title || 'Untitled note',
+          timestamp: note.created_at,
+          icon: '📝',
+          color: '#8B5CF6',
+          route: '/note-taker',
+        }),
+        'created_at'
+      );
 
       // Recent dreams
-      const { data: recentDreams } = await supabase
-        .from('dreams')
-        .select('*')
-        .eq('user_id', user.id)
-        .gte('created_at', sevenDaysAgo.toISOString())
-        .order('created_at', { ascending: false })
-        .limit(5);
+      await fetchAndTransform(
+        'dreams',
+        (dream) => ({
+          id: dream.id,
+          type: 'dream',
+          title: 'Added dream journal entry',
+          description: dream.title || 'Dream entry',
+          timestamp: dream.created_at,
+          icon: '☁️',
+          color: '#F59E0B',
+          route: '/dream-interpretation',
+        }),
+        'created_at'
+      );
 
-      if (recentDreams) {
-        recentDreams.forEach(dream => {
-          allActivities.push({
-            id: dream.id,
-            type: 'dream',
-            title: 'Added dream journal entry',
-            description: dream.title || 'Dream entry',
-            timestamp: dream.created_at,
-            icon: '☁️',
-            color: '#F59E0B',
-            route: '/dream-interpretation'
-          });
-        });
-      }
-
-      // Sort all activities by timestamp (most recent first)
+      // Sort all activities by timestamp
       allActivities.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-      // Take the most recent 3 activities
+      // Take the most recent 3
       setActivities(allActivities.slice(0, 3));
 
     } catch (error) {
       console.error('Error fetching recent activities:', error);
-      // Fallback to sample data if there's an error
       setActivities(getSampleActivities());
     } finally {
       setLoading(false);
     }
-  };
+  }, [user]);
+
+  useEffect(() => {
+    fetchRecentActivities();
+  }, [user, fetchRecentActivities]);
 
   const getSampleActivities = (): RecentActivity[] => {
     const now = new Date();
@@ -208,51 +212,51 @@ export function useRecentActivity() {
         type: 'bible_reading',
         title: 'Completed Bible reading',
         description: '15 minutes',
-        timestamp: new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
+        timestamp: new Date(now.getTime() - 2 * 60 * 60 * 1000).toISOString(),
         icon: '📖',
         color: '#3B82F6',
-        route: '/(tabs)/bible'
+        route: '/(tabs)/bible',
       },
       {
         id: '2',
         type: 'note',
         title: 'Added new note',
         description: 'Daily reflection',
-        timestamp: new Date(now.getTime() - 5 * 60 * 60 * 1000).toISOString(), // 5 hours ago
+        timestamp: new Date(now.getTime() - 5 * 60 * 60 * 1000).toISOString(),
         icon: '📝',
         color: '#8B5CF6',
-        route: '/note-taker'
+        route: '/note-taker',
       },
       {
         id: '3',
         type: 'dream',
         title: 'Added dream journal entry',
         description: 'Spiritual dream',
-        timestamp: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(), // 1 day ago
+        timestamp: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
         icon: '☁️',
         color: '#F59E0B',
-        route: '/dream-interpretation'
+        route: '/dream-interpretation',
       },
       {
         id: '4',
         type: 'prayer',
         title: 'Added new prayer request',
         description: 'Family health',
-        timestamp: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(), // 2 days ago
+        timestamp: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(),
         icon: '🙏',
         color: '#EF4444',
-        route: '/(tabs)/prayer-tracker'
+        route: '/(tabs)/prayer-tracker',
       },
       {
         id: '5',
         type: 'mood',
         title: 'Updated mood tracker',
         description: 'Rating: 8/10',
-        timestamp: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString(), // 3 days ago
+        timestamp: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString(),
         icon: '😊',
         color: '#10B981',
-        route: '/(tabs)/mood-tracker'
-      }
+        route: '/(tabs)/mood-tracker',
+      },
     ];
   };
 
@@ -278,7 +282,6 @@ export function useRecentActivity() {
     activities,
     loading,
     formatTimeAgo,
-    refresh: fetchRecentActivities
+    refresh: fetchRecentActivities,
   };
 }
-

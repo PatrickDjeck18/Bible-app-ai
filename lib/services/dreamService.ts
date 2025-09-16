@@ -1,51 +1,28 @@
-import { supabase } from '../supabase';
+import { db } from '../firebase'; // Assuming your Firebase initialization file
+import {
+  collection,
+  query,
+  where,
+  orderBy,
+  limit,
+  getDocs,
+  getDoc,
+  doc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  serverTimestamp,
+} from 'firebase/firestore';
+
+// Note: Ensure your DreamEntry, DreamAnalysisRequest, etc. are defined correctly.
 import { DreamEntry, DreamAnalysisRequest, DreamAnalysisResponse } from '../types/dreams';
 
 export class DreamService {
-  // Enhanced cache for table existence check
-  private static tableExistsCache: boolean | null = null;
   // Enhanced cache for dreams data with better performance
   private static dreamsCache: DreamEntry[] | null = null;
   private static lastFetchTime: number = 0;
   private static readonly CACHE_DURATION = 10 * 60 * 1000; // Increased to 10 minutes for better performance
   private static readonly API_TIMEOUT = 15000; // 15 second timeout for API calls
-
-  // Check if dreams table exists (optimized version)
-  static async ensureDreamsTableExists(): Promise<void> {
-    // Return early if we already know the table exists
-    if (this.tableExistsCache === true) {
-      return;
-    }
-
-    try {
-      console.log('🔍 Testing dreams table access...');
-      // Use a faster query with timeout
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-
-      const { error } = await supabase
-        .from('dreams')
-        .select('id')
-        .limit(1)
-        .abortSignal(controller.signal);
-
-      clearTimeout(timeoutId);
-
-      if (error && error.code === '42P01') { // Table doesn't exist error
-        console.error('❌ Dreams table doesn\'t exist!');
-        throw new Error('Dreams table does not exist. Please run the migration first.');
-      } else if (error) {
-        console.error('❌ Error checking dreams table:', error);
-        throw error;
-      } else {
-        console.log('✅ Dreams table exists');
-        this.tableExistsCache = true;
-      }
-    } catch (error) {
-      console.error('❌ Error ensuring dreams table exists:', error);
-      throw error;
-    }
-  }
 
   // Clear cache (useful for testing or when data might be stale)
   static clearCache(): void {
@@ -103,20 +80,12 @@ export class DreamService {
   // Get all dreams for the current user (optimized with better caching)
   static async getDreams(userId: string, forceRefresh: boolean = false): Promise<DreamEntry[]> {
     try {
-      // Check cache first (unless force refresh is requested)
       const now = Date.now();
-      if (!forceRefresh && 
-          this.dreamsCache !== null && 
-          (now - this.lastFetchTime) < this.CACHE_DURATION) {
+      if (!forceRefresh && this.dreamsCache !== null && (now - this.lastFetchTime) < this.CACHE_DURATION) {
         console.log('📦 Returning cached dreams data');
         return this.dreamsCache;
       }
 
-      // Only check table existence if we haven't confirmed it exists
-      if (this.tableExistsCache !== true) {
-        await this.ensureDreamsTableExists();
-      }
-      
       if (!userId) {
         console.log('No authenticated user found');
         this.dreamsCache = [];
@@ -126,35 +95,21 @@ export class DreamService {
 
       console.log('🔄 Fetching dreams from database...');
       
-      // Use a timeout for the database query
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-
-      const { data, error } = await supabase
-        .from('dreams')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .abortSignal(controller.signal);
-
-      clearTimeout(timeoutId);
-
-      if (error) {
-        console.error('Error fetching dreams:', error);
-        // If table doesn't exist, return empty array instead of crashing
-        if (error.code === '42P01') {
-          console.log('🔄 Dreams table not found, returning empty array');
-          this.dreamsCache = [];
-          this.lastFetchTime = now;
-          return [];
-        }
-        this.dreamsCache = [];
-        this.lastFetchTime = now;
-        return [];
-      }
+      const dreamsCollection = collection(db, 'dreams');
+      const q = query(
+        dreamsCollection,
+        where('user_id', '==', userId),
+        orderBy('created_at', 'desc')
+      );
       
+      const querySnapshot = await getDocs(q);
+      const dreamsData: DreamEntry[] = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+      } as DreamEntry)); // Type assertion for type safety
+
       // Update cache
-      this.dreamsCache = data || [];
+      this.dreamsCache = dreamsData;
       this.lastFetchTime = now;
       console.log(`✅ Fetched ${this.dreamsCache.length} dreams`);
       
@@ -167,17 +122,10 @@ export class DreamService {
     }
   }
 
-  // Add a new dream and get real AI interpretation (optimized with timeout)
+  // Add a new dream and get real AI interpretation
   static async addAndInterpretDream(request: DreamAnalysisRequest, userId: string): Promise<DreamEntry> {
     try {
       console.log('🚀 Starting dream analysis with real DeepSeek API');
-      console.log('📝 Request data:', request);
-      console.log('👤 User ID:', userId);
-      
-      // Ensure the dreams table exists
-      console.log('🔍 Checking if dreams table exists...');
-      await this.ensureDreamsTableExists();
-      console.log('🔍 Dreams table check completed');
       
       if (!userId) {
         console.error('❌ No authenticated user found');
@@ -192,25 +140,18 @@ export class DreamService {
         title: request.dreamTitle,
         description: request.dreamDescription,
         mood: request.mood,
-        is_analyzed: false
+        is_analyzed: false,
+        created_at: serverTimestamp(),
+        updated_at: serverTimestamp()
       };
       
       console.log('📝 Inserting dream data:', dreamDataToInsert);
       
-      const { data: dreamData, error: insertError } = await supabase
-        .from('dreams')
-        .insert(dreamDataToInsert)
-        .select()
-        .single();
+      const docRef = await addDoc(collection(db, 'dreams'), dreamDataToInsert);
 
-      if (insertError) {
-        console.error('❌ Error inserting dream:', insertError);
-        throw insertError;
-      }
+      console.log('✅ Dream saved successfully with ID:', docRef.id);
 
-      console.log('✅ Dream saved successfully:', dreamData.id);
-
-      // Get AI interpretation with timeout (will use fallback if API fails)
+      // Get AI interpretation (will use fallback if API fails)
       console.log('🔍 Getting AI interpretation...');
       const interpretation = await this.getDeepSeekInterpretationWithTimeout(request);
       console.log('✅ AI interpretation received:', interpretation);
@@ -224,22 +165,18 @@ export class DreamService {
         prayer: interpretation.prayer,
         significance: interpretation.significance,
         is_analyzed: true,
-        updated_at: new Date().toISOString()
+        updated_at: serverTimestamp()
       };
       
       console.log('📝 Updating dream with interpretation:', updateData);
       
-      const { data: updatedDream, error: updateError } = await supabase
-        .from('dreams')
-        .update(updateData)
-        .eq('id', dreamData.id)
-        .select()
-        .single();
-
-      if (updateError) {
-        console.error('❌ Error updating dream with interpretation:', updateError);
-        throw updateError;
-      }
+      await updateDoc(doc(db, 'dreams', docRef.id), updateData);
+      
+      const updatedDocSnapshot = await getDoc(doc(db, 'dreams', docRef.id));
+      const updatedDream = {
+        id: updatedDocSnapshot.id,
+        ...updatedDocSnapshot.data()
+      } as DreamEntry;
 
       console.log('✅ Dream updated with AI interpretation successfully');
       console.log('🎉 Final dream data:', updatedDream);
@@ -286,7 +223,7 @@ Respond ONLY with valid JSON in this exact format (no additional text):
   "symbols": [
     {"symbol": "symbol name", "meaning": "biblical meaning", "bibleVerse": "relevant verse with reference"}
   ],
-  "prayer": "A heartfelt prayer based on the dream themes",
+  "prayer": "A heartfelt prayer based on the dream's themes",
   "significance": "low|medium|high"
 }
 
@@ -331,33 +268,25 @@ Make the interpretation specific to the dream content, not generic. Reference ac
         throw new Error(`DeepSeek API request failed: ${response.status} - ${errorText}`);
       }
 
-
       const responseData = await response.json();
-      console.log('📝 DeepSeek API raw response:', responseData);
       const content = responseData.choices?.[0]?.message?.content;
 
       if (!content) {
         throw new Error('No content received from DeepSeek API');
       }
 
-      console.log('📄 DeepSeek content:', content);
-
-      // Parse JSON response
       let parsedResponse: DreamAnalysisResponse;
       try {
-        // Clean the content in case there's extra text
         const jsonMatch = content.match(/\{[\s\S]*\}/);
         const jsonContent = jsonMatch ? jsonMatch[0] : content;
         
         parsedResponse = JSON.parse(jsonContent);
-        console.log('✅ Successfully parsed DeepSeek response:', parsedResponse);
       } catch (parseError) {
         console.error('❌ JSON parsing error:', parseError);
         console.error('❌ Content that failed to parse:', content);
         throw new Error('Failed to parse DeepSeek API response as JSON');
       }
 
-      // Validate and ensure all required fields are present
       const finalResponse: DreamAnalysisResponse = {
         interpretation: parsedResponse.interpretation || 'Unable to interpret dream at this time.',
         biblicalInsights: Array.isArray(parsedResponse.biblicalInsights) ? parsedResponse.biblicalInsights : ['Seek God\'s wisdom in prayer'],
@@ -367,11 +296,9 @@ Make the interpretation specific to the dream content, not generic. Reference ac
         significance: ['low', 'medium', 'high'].includes(parsedResponse.significance) ? parsedResponse.significance : 'medium'
       };
 
-      console.log('🎉 Final validated response:', finalResponse);
       return finalResponse;
     } catch (error) {
       console.error('❌ DeepSeek API call failed:', error);
-      // Return a fallback interpretation instead of throwing
       console.log('🔄 Falling back to basic interpretation due to API error');
       return this.createBasicInterpretation(request);
     }
@@ -380,10 +307,6 @@ Make the interpretation specific to the dream content, not generic. Reference ac
   // Create basic interpretation as fallback
   static createBasicInterpretation(request: DreamAnalysisRequest): DreamAnalysisResponse {
     const { dreamTitle, dreamDescription, mood } = request;
-    
-    console.log('🔍 Creating fallback interpretation for:', { dreamTitle, mood });
-    
-    // Analyze the dream content for specific symbols and themes
     const desc = dreamDescription.toLowerCase();
     const title = dreamTitle.toLowerCase();
     
@@ -392,7 +315,6 @@ Make the interpretation specific to the dream content, not generic. Reference ac
     let symbols: Array<{symbol: string, meaning: string, bibleVerse: string}> = [];
     let significance: 'low' | 'medium' | 'high' = 'medium';
 
-    // Money-related dreams
     if (desc.includes('money') || desc.includes('counting') || title.includes('money')) {
       interpretation = 'Dreams about money often reflect concerns about provision, stewardship, or material security. From a biblical perspective, this dream may be calling you to examine your relationship with material possessions and trust in God as your ultimate provider.';
       spiritualMeaning = 'This dream may be highlighting the importance of seeking God\'s kingdom first and trusting Him for your material needs, as taught in Matthew 6:33.';
@@ -402,9 +324,7 @@ Make the interpretation specific to the dream content, not generic. Reference ac
         bibleVerse: 'Matthew 6:26 - "Look at the birds of the air; they do not sow or reap or store away in barns, and yet your heavenly Father feeds them. Are you not much more valuable than they?"'
       });
       significance = 'medium';
-    }
-    // Water-related dreams
-    else if (desc.includes('water') || desc.includes('river') || desc.includes('ocean')) {
+    } else if (desc.includes('water') || desc.includes('river') || desc.includes('ocean')) {
       interpretation = 'Water in dreams often symbolizes spiritual cleansing, renewal, and the Holy Spirit. This dream may indicate God is bringing refreshment and new life to areas of your spiritual journey.';
       spiritualMeaning = 'The water represents God\'s cleansing power and the flow of His Spirit in your life, bringing renewal and spiritual refreshment.';
       symbols.push({
@@ -413,9 +333,7 @@ Make the interpretation specific to the dream content, not generic. Reference ac
         bibleVerse: 'John 4:14 - "Whoever drinks the water I give them will never thirst. Indeed, the water I give them will become in them a spring of water welling up to eternal life."'
       });
       significance = 'high';
-    }
-    // Light-related dreams
-    else if (desc.includes('light') || desc.includes('bright') || desc.includes('sun')) {
+    } else if (desc.includes('light') || desc.includes('bright') || desc.includes('sun')) {
       interpretation = 'Light in dreams represents God\'s presence, truth, and guidance. This dream suggests divine illumination and clarity coming into your life situation.';
       spiritualMeaning = 'The light symbolizes God\'s truth breaking through darkness and His guidance illuminating your path forward.';
       symbols.push({
@@ -424,9 +342,7 @@ Make the interpretation specific to the dream content, not generic. Reference ac
         bibleVerse: 'John 8:12 - "I am the light of the world. Whoever follows me will never walk in darkness, but will have the light of life."'
       });
       significance = 'high';
-    }
-    // Family-related dreams
-    else if (desc.includes('family') || desc.includes('mother') || desc.includes('father') || desc.includes('child')) {
+    } else if (desc.includes('family') || desc.includes('mother') || desc.includes('father') || desc.includes('child')) {
       interpretation = 'Dreams about family often reflect your relationships, responsibilities, and God\'s calling on your life. This dream may be highlighting the importance of family bonds and God\'s design for relationships.';
       spiritualMeaning = 'Family in dreams can represent God\'s care for His children and the importance of community in your spiritual journey.';
       symbols.push({
@@ -435,9 +351,7 @@ Make the interpretation specific to the dream content, not generic. Reference ac
         bibleVerse: 'Psalm 127:3 - "Children are a heritage from the Lord, offspring a reward from him."'
       });
       significance = 'medium';
-    }
-    // Default interpretation based on mood
-    else {
+    } else {
       interpretation = this.generateMoodBasedInterpretation(mood, dreamDescription);
       spiritualMeaning = this.getSpiritualMeaning(mood);
       symbols = this.analyzeSymbols(dreamDescription);
@@ -453,7 +367,6 @@ Make the interpretation specific to the dream content, not generic. Reference ac
       significance
     };
     
-    console.log('✅ Fallback interpretation created:', result);
     return result;
   }
 
@@ -473,7 +386,6 @@ Make the interpretation specific to the dream content, not generic. Reference ac
   static getBiblicalInsights(mood: string, description: string): string[] {
     const desc = description.toLowerCase();
     
-    // Money/financial themes
     if (desc.includes('money') || desc.includes('counting') || desc.includes('wealth')) {
       return [
         'Matthew 6:19-21 - "Do not store up for yourselves treasures on earth, where moths and vermin destroy, and where thieves break in and steal. But store up for yourselves treasures in heaven... For where your treasure is, there your heart will be also."',
@@ -483,7 +395,6 @@ Make the interpretation specific to the dream content, not generic. Reference ac
       ];
     }
     
-    // Default insights based on mood
     const insights = [
       'Philippians 4:6-7 - "Do not be anxious about anything, but in every situation, by prayer and petition, with thanksgiving, present your requests to God. And the peace of God, which transcends all understanding, will guard your hearts and your minds in Christ Jesus."',
       'Jeremiah 29:11 - "For I know the plans I have for you," declares the Lord, "plans to prosper you and not to harm you, to give you hope and a future."',
@@ -512,7 +423,6 @@ Make the interpretation specific to the dream content, not generic. Reference ac
     const symbols = [];
     const desc = description.toLowerCase();
 
-    // Money symbols
     if (desc.includes('money') || desc.includes('coins') || desc.includes('counting')) {
       symbols.push({
         symbol: 'Money/Counting',
@@ -561,7 +471,6 @@ Make the interpretation specific to the dream content, not generic. Reference ac
       });
     }
 
-    // Default symbol if none found
     if (symbols.length === 0) {
       symbols.push({
         symbol: 'Spiritual Journey',
@@ -576,7 +485,6 @@ Make the interpretation specific to the dream content, not generic. Reference ac
   static generatePrayer(title: string, mood: string, description: string): string {
     const desc = description.toLowerCase();
     
-    // Money-related prayer
     if (desc.includes('money') || desc.includes('counting') || desc.includes('wealth')) {
       return 'Heavenly Father, I bring before You my concerns about provision and financial security. Help me to trust in You as my ultimate provider and to be a faithful steward of the resources You have given me. Teach me to seek first Your kingdom, knowing that You will provide for all my needs. Remove any anxiety about money and help me to find my security in You alone. In Jesus\' name, Amen.';
     }
@@ -596,7 +504,6 @@ Make the interpretation specific to the dream content, not generic. Reference ac
   static determineSignificance(mood: string, description: string): 'low' | 'medium' | 'high' {
     const desc = description.toLowerCase();
     
-    // High significance indicators
     if (mood === 'peaceful' || mood === 'joyful' || mood === 'hopeful' ||
         desc.includes('god') || desc.includes('jesus') || desc.includes('angel') ||
         desc.includes('light') || desc.includes('heaven') || desc.includes('church') ||
@@ -604,7 +511,6 @@ Make the interpretation specific to the dream content, not generic. Reference ac
       return 'high';
     }
     
-    // Low significance indicators
     if (mood === 'confused' || desc.length < 50) {
       return 'low';
     }
@@ -617,13 +523,14 @@ Make the interpretation specific to the dream content, not generic. Reference ac
     try {
       if (!userId) throw new Error('User not authenticated');
 
-      const { error } = await supabase
-        .from('dreams')
-        .update(updates)
-        .eq('id', id)
-        .eq('user_id', userId);
+      const dreamDocRef = doc(db, 'dreams', id);
+      const docSnapshot = await getDoc(dreamDocRef);
 
-      if (error) throw error;
+      if (!docSnapshot.exists() || docSnapshot.data()?.user_id !== userId) {
+        throw new Error('Dream not found or user not authorized');
+      }
+
+      await updateDoc(dreamDocRef, { ...updates, updated_at: serverTimestamp() });
     } catch (error) {
       console.error('Error updating dream:', error);
       throw error;
@@ -642,20 +549,17 @@ Make the interpretation specific to the dream content, not generic. Reference ac
       
       console.log('👤 User authenticated:', userId);
 
-      const { error } = await supabase
-        .from('dreams')
-        .delete()
-        .eq('id', id)
-        .eq('user_id', userId);
+      const dreamDocRef = doc(db, 'dreams', id);
+      const docSnapshot = await getDoc(dreamDocRef);
 
-      if (error) {
-        console.error('❌ Supabase delete error:', error);
-        throw error;
+      if (!docSnapshot.exists() || docSnapshot.data()?.user_id !== userId) {
+        throw new Error('Dream not found or user not authorized');
       }
+
+      await deleteDoc(dreamDocRef);
       
       console.log('✅ Dream deleted successfully from database');
       
-      // Clear cache since we deleted a dream
       this.clearCache();
     } catch (error) {
       console.error('❌ Error in deleteDream service:', error);
@@ -668,15 +572,17 @@ Make the interpretation specific to the dream content, not generic. Reference ac
     try {
       if (!userId) throw new Error('User not authenticated');
 
-      const { data, error } = await supabase
-        .from('dreams')
-        .select('*')
-        .eq('id', id)
-        .eq('user_id', userId)
-        .single();
+      const dreamDocRef = doc(db, 'dreams', id);
+      const docSnapshot = await getDoc(dreamDocRef);
 
-      if (error) throw error;
-      return data;
+      if (!docSnapshot.exists() || docSnapshot.data()?.user_id !== userId) {
+        return null;
+      }
+
+      return {
+        id: docSnapshot.id,
+        ...docSnapshot.data()
+      } as DreamEntry;
     } catch (error) {
       console.error('Error fetching dream:', error);
       throw error;

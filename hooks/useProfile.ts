@@ -1,92 +1,99 @@
-import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
-import type { Profile } from '@/lib/supabase';
+import { useEffect, useState, useCallback } from 'react';
+import { db } from '@/lib/firebase';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { useAuth } from './useAuth';
+
+// Use a simplified Profile type for Firebase
+export interface Profile {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  avatar_url: string | null;
+  journey_start_date: string | null;
+  created_at: number;
+  updated_at: number;
+}
 
 export function useProfile() {
   const { user } = useAuth();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (user) {
-      fetchProfile();
-    } else {
+  // Function to fetch the user's profile and create it if it doesn't exist
+  const fetchProfile = useCallback(async () => {
+    if (!user) {
       setProfile(null);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const profileDocRef = doc(db, 'profiles', user.uid);
+      const docSnap = await getDoc(profileDocRef);
+
+      if (docSnap.exists()) {
+        setProfile({ id: docSnap.id, ...docSnap.data() } as Profile);
+      } else {
+        // Profile does not exist, so create one.
+        console.log('Profile not found, creating new profile for user:', user.uid);
+        const newProfileData: Omit<Profile, 'id'> = {
+          full_name: user.displayName || user.email?.split('@')[0] || 'User',
+          email: user.email,
+          avatar_url: user.photoURL,
+          journey_start_date: new Date().toISOString().split('T')[0],
+          created_at: Date.now(),
+          updated_at: Date.now(),
+        };
+        await setDoc(profileDocRef, newProfileData);
+        setProfile({ id: user.uid, ...newProfileData } as Profile);
+      }
+    } catch (error) {
+      console.error('Error fetching/creating profile:', error);
+      setProfile(null);
+    } finally {
       setLoading(false);
     }
   }, [user]);
 
-  const fetchProfile = async () => {
-    if (!user) return;
-
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-
-      if (error) {
-        console.error('Error fetching profile:', error);
-        
-        // If profile doesn't exist, create one
-        if (error.code === 'PGRST116') {
-          console.log('Profile not found, creating new profile for user:', user.id);
-          const { data: newProfile, error: createError } = await supabase
-            .from('profiles')
-            .insert({
-              id: user.id,
-              full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User',
-              email: user.email,
-              journey_start_date: new Date().toISOString().split('T')[0]
-            })
-            .select()
-            .single();
-
-          if (createError) {
-            console.error('Error creating profile:', createError);
-            return;
-          }
-
-          setProfile(newProfile);
-          return;
-        }
-        
-        return;
-      }
-
-      setProfile(data);
-    } catch (error) {
-      console.error('Error fetching profile:', error);
-    } finally {
-      setLoading(false);
+  // Function to update the user's profile
+  const updateProfile = useCallback(async (updates: Partial<Profile>) => {
+    if (!user) {
+      return { error: 'No user logged in' };
     }
-  };
-
-  const updateProfile = async (updates: Partial<Profile>) => {
-    if (!user) return { error: 'No user logged in' };
 
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .update(updates)
-        .eq('id', user.id)
-        .select()
-        .single();
+      const profileDocRef = doc(db, 'profiles', user.uid);
+      const now = Date.now();
 
-      if (error) {
-        console.error('Error updating profile:', error);
-        return { error };
-      }
+      // Ensure that 'id' is not included in the updates to the document
+      const { id, ...updatesWithoutId } = updates;
 
-      setProfile(data);
-      return { data, error: null };
-    } catch (error) {
+      await updateDoc(profileDocRef, {
+        ...updatesWithoutId,
+        updated_at: now,
+      });
+
+      // Update the local state to reflect the changes
+      setProfile(prevProfile => {
+        if (!prevProfile) return null;
+        return {
+          ...prevProfile,
+          ...updatesWithoutId,
+          updated_at: now,
+        };
+      });
+
+      return { data: { ...updates, id: user.uid }, error: null };
+    } catch (error: any) {
       console.error('Error updating profile:', error);
-      return { error };
+      return { error: error.message || 'Failed to update profile' };
     }
-  };
+  }, [user]);
+
+  useEffect(() => {
+    fetchProfile();
+  }, [user, fetchProfile]);
 
   return {
     profile,

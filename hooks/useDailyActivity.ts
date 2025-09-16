@@ -1,6 +1,18 @@
-import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
-import type { DailyActivity } from '@/lib/supabase';
+import { useEffect, useState, useCallback } from 'react';
+import { db } from '@/lib/firebase';
+import {
+  collection,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  query,
+  where,
+  getDocs,
+  onSnapshot,
+  orderBy,
+  limit,
+} from 'firebase/firestore';
 import { useAuth } from './useAuth';
 
 // Define activity goals
@@ -11,235 +23,135 @@ const DAILY_GOALS = {
   mood_rating: 1, // Just needs to be set
 };
 
+// Define the data types for Firestore documents
+export interface DailyActivity {
+  id?: string;
+  user_id: string;
+  activity_date: string;
+  bible_reading_minutes: number;
+  prayer_minutes: number;
+  devotional_completed: boolean;
+  mood_rating: number | null;
+  activities_completed: number;
+  goal_percentage: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export function useDailyActivity() {
   const { user } = useAuth();
   const [todayActivity, setTodayActivity] = useState<DailyActivity | null>(null);
   const [loading, setLoading] = useState(true);
-  const [weeklyProgress, setWeeklyProgress] = useState<any[]>([]);
-  const [tableExists, setTableExists] = useState<boolean | null>(null);
+  const [weeklyProgress, setWeeklyProgress] = useState<DailyActivity[]>([]);
 
-  // Check if the daily_activities table exists
-  const checkTableExists = async () => {
+  // Fetches today's activity, creating it if it doesn't exist
+  const fetchTodayActivity = useCallback(async () => {
+    if (!user) {
+      setTodayActivity(null);
+      setLoading(false);
+      return;
+    }
+
     try {
-      const { error } = await supabase
-        .from('daily_activities')
-        .select('id')
-        .limit(1);
-      
-      if (error && error.code === '42P01') {
-        // Table doesn't exist
-        setTableExists(false);
-        console.error('❌ daily_activities table does not exist. Please run the Supabase migration:');
-        console.error('   Run this SQL in your Supabase SQL editor:');
-        console.error(`
--- Create daily_activities table
-CREATE TABLE IF NOT EXISTS daily_activities (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL,
-  activity_date date DEFAULT CURRENT_DATE,
-  bible_reading_minutes integer DEFAULT 0,
-  prayer_minutes integer DEFAULT 0,
-  devotional_completed boolean DEFAULT false,
-  mood_rating integer CHECK (mood_rating >= 1 AND mood_rating <= 10),
-  activities_completed integer DEFAULT 0,
-  goal_percentage integer DEFAULT 0,
-  created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now(),
-  UNIQUE(user_id, activity_date)
-);
+      const today = new Date().toISOString().split('T')[0];
+      const todayDocRef = doc(db, 'daily_activities', `${user.uid}_${today}`);
+      const docSnap = await getDoc(todayDocRef);
 
--- Enable Row Level Security
-ALTER TABLE daily_activities ENABLE ROW LEVEL SECURITY;
-
--- Create policy
-CREATE POLICY "Allow all operations for daily activities"
-  ON daily_activities
-  FOR ALL
-  TO authenticated
-  USING (true)
-  WITH CHECK (true);
-
--- Create trigger for updated_at
-CREATE TRIGGER update_daily_activities_updated_at 
-  BEFORE UPDATE ON daily_activities 
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-        `);
-        return false;
-      } else if (error) {
-        console.error('Error checking table existence:', error);
-        return false;
+      if (docSnap.exists()) {
+        console.log('🔴 Found existing daily activity:', docSnap.data());
+        setTodayActivity({ ...docSnap.data(), id: docSnap.id } as DailyActivity);
       } else {
-        setTableExists(true);
-        return true;
+        // Create today's activity if it doesn't exist
+        console.log('🔴 Creating new daily activity for user:', user.uid);
+        const newActivityData = {
+          user_id: user.uid,
+          activity_date: today,
+          bible_reading_minutes: 0,
+          prayer_minutes: 0,
+          devotional_completed: false,
+          mood_rating: null,
+          activities_completed: 0,
+          goal_percentage: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        await setDoc(todayDocRef, newActivityData);
+        setTodayActivity({ ...newActivityData, id: todayDocRef.id });
+        console.log('🔴 Successfully created daily activity.');
       }
     } catch (error) {
-      console.error('Error checking table existence:', error);
-      return false;
+      console.error('Error fetching/creating daily activity:', error);
+    } finally {
+      setLoading(false);
     }
-  };
+  }, [user]);
+
+  // Fetches the last 7 days of activity
+  const fetchWeeklyProgress = useCallback(async () => {
+    if (!user) return;
+
+    try {
+      const today = new Date();
+      const sevenDaysAgo = new Date(today);
+      sevenDaysAgo.setDate(today.getDate() - 6);
+      const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0];
+      const todayStr = today.toISOString().split('T')[0];
+
+      const q = query(
+        collection(db, 'daily_activities'),
+        where('user_id', '==', user.uid),
+        where('activity_date', '>=', sevenDaysAgoStr),
+        where('activity_date', '<=', todayStr),
+        orderBy('activity_date', 'asc')
+      );
+
+      const querySnapshot = await getDocs(q);
+      const progress: DailyActivity[] = [];
+      querySnapshot.forEach((doc) => {
+        progress.push({ ...doc.data(), id: doc.id } as DailyActivity);
+      });
+      setWeeklyProgress(progress);
+    } catch (error) {
+      console.error('Error fetching weekly progress:', error);
+    }
+  }, [user]);
 
   useEffect(() => {
     if (user) {
-      checkTableExists().then((exists) => {
-        if (exists) {
-          fetchTodayActivity();
-          fetchWeeklyProgress();
-        } else {
-          setLoading(false);
-        }
-      });
+      fetchTodayActivity();
+      fetchWeeklyProgress();
     } else {
       setTodayActivity(null);
       setWeeklyProgress([]);
       setLoading(false);
     }
-  }, [user]);
+  }, [user, fetchTodayActivity, fetchWeeklyProgress]);
 
   // Realtime subscription to keep today's progress in sync
   useEffect(() => {
-    if (!user || tableExists === false) return;
+    if (!user) return;
+    const today = new Date().toISOString().split('T')[0];
+    const todayDocRef = doc(db, 'daily_activities', `${user.uid}_${today}`);
 
-    const channel = supabase
-      .channel(`daily-activities:${user.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'daily_activities',
-          filter: `user_id=eq.${user.id}`,
-        },
-        () => {
-          fetchTodayActivity();
-          fetchWeeklyProgress();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      try {
-        supabase.removeChannel(channel);
-      } catch (e) {
-        // noop
-      }
-    };
-  }, [user, tableExists]);
-
-  const fetchTodayActivity = async () => {
-    if (!user || tableExists === false) return;
-
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      
-      console.log('🔴 Fetching daily activity for user:', user.id, 'date:', today);
-      
-      const { data, error } = await supabase
-        .from('daily_activities')
-        .select('*')
-        .eq('user_id', user.id)
-        .eq('activity_date', today)
-        .maybeSingle();
-
-      if (error) {
-        if (error.code === '42P01') {
-          console.error('❌ daily_activities table does not exist. Please run the migration.');
-          setTableExists(false);
-          return;
-        }
-        if (error.code === '42501') {
-          console.error('❌ RLS policy violation. This might be due to authentication issues.');
-          console.error('   Error details:', error);
-          return;
-        }
-        console.error('Error fetching daily activity:', error);
-        return;
-      }
-
-      if (data) {
-        console.log('🔴 Found existing daily activity:', data);
-        setTodayActivity(data);
+    const unsubscribe = onSnapshot(todayDocRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setTodayActivity({ ...docSnap.data(), id: docSnap.id } as DailyActivity);
       } else {
-        // Create today's activity if it doesn't exist
-        console.log('🔴 Creating new daily activity for user:', user.id);
-        const { data: newActivity, error: createError } = await supabase
-          .from('daily_activities')
-          .insert({
-            user_id: user.id,
-            activity_date: today,
-            bible_reading_minutes: 0,
-            prayer_minutes: 0,
-            devotional_completed: false,
-            mood_rating: null,
-            activities_completed: 0,
-            goal_percentage: 0,
-          })
-          .select()
-          .single();
-
-        if (createError) {
-          if (createError.code === '42P01') {
-            console.error('❌ daily_activities table does not exist. Please run the migration.');
-            setTableExists(false);
-            return;
-          }
-          if (createError.code === '42501') {
-            console.error('❌ RLS policy violation when creating daily activity.');
-            console.error('   This might be due to authentication issues or missing RLS policies.');
-            console.error('   Error details:', createError);
-            return;
-          }
-          console.error('Error creating daily activity:', createError);
-          return;
-        }
-
-        console.log('🔴 Successfully created daily activity:', newActivity);
-        setTodayActivity(newActivity);
+        setTodayActivity(null);
       }
-    } catch (error) {
-      console.error('Error fetching daily activity:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+      fetchWeeklyProgress();
+    }, (error) => {
+      console.error('Realtime update failed:', error);
+    });
 
-  const fetchWeeklyProgress = async () => {
-    if (!user || tableExists === false) return;
+    return () => unsubscribe();
+  }, [user, fetchWeeklyProgress]);
+
+  const updateTodayActivity = useCallback(async (updates: Partial<DailyActivity>) => {
+    if (!user || !todayActivity) return { error: 'No activity found or user not authenticated' };
 
     try {
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-      const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0];
-      const today = new Date().toISOString().split('T')[0];
-
-      const { data, error } = await supabase
-        .from('daily_activities')
-        .select('*')
-        .eq('user_id', user.id)
-        .gte('activity_date', sevenDaysAgoStr)
-        .lte('activity_date', today)
-        .order('activity_date', { ascending: true });
-
-      if (error) {
-        if (error.code === '42P01') {
-          console.error('❌ daily_activities table does not exist. Please run the migration.');
-          setTableExists(false);
-          return;
-        }
-        console.error('Error fetching weekly progress:', error);
-        return;
-      }
-
-      setWeeklyProgress(data || []);
-    } catch (error) {
-      console.error('Error fetching weekly progress:', error);
-    }
-  };
-
-  const updateTodayActivity = async (updates: Partial<DailyActivity>) => {
-    if (!user || !todayActivity || tableExists === false) return { error: 'No activity found or table missing' };
-
-    try {
-      // Calculate activities completed based on updates
+      const todayDocRef = doc(db, 'daily_activities', todayActivity.id!);
       const updatedActivity = { ...todayActivity, ...updates };
       const activitiesCompleted = calculateActivitiesCompleted(updatedActivity);
 
@@ -247,34 +159,16 @@ CREATE TRIGGER update_daily_activities_updated_at
         ...updates,
         activities_completed: activitiesCompleted,
         goal_percentage: Math.round((activitiesCompleted / 4) * 100),
+        updated_at: new Date().toISOString(),
       };
 
-      const { data, error } = await supabase
-        .from('daily_activities')
-        .update(finalUpdates)
-        .eq('id', todayActivity.id)
-        .select()
-        .single();
-
-      if (error) {
-        if (error.code === '42P01') {
-          console.error('❌ daily_activities table does not exist. Please run the migration.');
-          setTableExists(false);
-          return { error: 'Table missing - run migration' };
-        }
-        console.error('Error updating daily activity:', error);
-        return { error };
-      }
-
-      setTodayActivity(data);
-      // Refresh weekly progress after update
-      await fetchWeeklyProgress();
-      return { data, error: null };
+      await updateDoc(todayDocRef, finalUpdates);
+      return { data: finalUpdates, error: null };
     } catch (error) {
       console.error('Error updating daily activity:', error);
       return { error };
     }
-  };
+  }, [todayActivity, user]);
 
   const calculateActivitiesCompleted = (activity: DailyActivity) => {
     const goals = [
@@ -288,25 +182,21 @@ CREATE TRIGGER update_daily_activities_updated_at
 
   const calculateGoalPercentage = () => {
     if (!todayActivity) return 0;
-    
     return todayActivity.goal_percentage || 0;
   };
 
   const getWeeklyStats = () => {
     if (weeklyProgress.length === 0) return { averagePercentage: 0, totalDays: 0, completedDays: 0 };
-
     const totalDays = weeklyProgress.length;
     const completedDays = weeklyProgress.filter(day => day.goal_percentage >= 100).length;
     const averagePercentage = Math.round(
       weeklyProgress.reduce((sum, day) => sum + (day.goal_percentage || 0), 0) / totalDays
     );
-
     return { averagePercentage, totalDays, completedDays };
   };
 
   const getTodayGoals = () => {
     if (!todayActivity) return [];
-
     return [
       {
         id: 'bible_reading',
@@ -362,12 +252,11 @@ CREATE TRIGGER update_daily_activities_updated_at
   const updateMoodRating = async (rating: number) => {
     return await updateTodayActivity({ mood_rating: rating });
   };
+
   const getCurrentStreak = () => {
     if (!user || weeklyProgress.length === 0) return 0;
-
     let streak = 0;
-    const sortedDays = [...weeklyProgress].reverse(); // Most recent first
-
+    const sortedDays = [...weeklyProgress].reverse();
     for (const day of sortedDays) {
       if (day.goal_percentage >= 100) {
         streak++;
@@ -375,15 +264,17 @@ CREATE TRIGGER update_daily_activities_updated_at
         break;
       }
     }
-
     return streak;
   };
+
+  const refetch = useCallback(() => {
+    return Promise.all([fetchTodayActivity(), fetchWeeklyProgress()]);
+  }, [fetchTodayActivity, fetchWeeklyProgress]);
 
   return {
     todayActivity,
     weeklyProgress,
     loading,
-    tableExists,
     updateTodayActivity,
     calculateGoalPercentage,
     getWeeklyStats,
@@ -393,6 +284,6 @@ CREATE TRIGGER update_daily_activities_updated_at
     updatePrayerTime,
     markDevotionalComplete,
     updateMoodRating,
-    refetch: () => Promise.all([fetchTodayActivity(), fetchWeeklyProgress()]),
+    refetch,
   };
 }

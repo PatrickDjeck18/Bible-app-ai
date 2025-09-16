@@ -41,7 +41,7 @@ export default function PrayerJournalScreen() {
       prayer_notes: null,
       gratitude_notes: null,
       reminder_time: null,
-      reminder_frequency: null,
+      reminder_frequency: 'daily' as const,
       last_prayed_at: null,
       prayer_count: 0,
       answered_prayer_count: 0,
@@ -60,14 +60,15 @@ export default function PrayerJournalScreen() {
     setDescription('');
   };
 
-  const handleMarkAnswered = async (prayerId: string) => {
-    const result = await markPrayerAsAnswered(prayerId);
-    if (result.error) {
-      Alert.alert('Error', 'Failed to mark prayer as answered.');
-    } else {
-      Alert.alert('Success', 'Prayer answered! 🎉');
-    }
-  };
+ // Pass a default string as the second argument
+const handleMarkAnswered = async (prayerId: string) => {
+  const result = await markPrayerAsAnswered(prayerId, ""); // <-- Pass an empty string
+  if (result.error) {
+    Alert.alert('Error', 'Failed to mark prayer as answered.');
+  } else {
+    Alert.alert('Success', 'Prayer answered! 🎉');
+  }
+};
 
   const handleDelete = (prayer: Prayer) => {
     Alert.alert(

@@ -1,4 +1,4 @@
-import { signInWithCredential, GoogleAuthProvider } from 'firebase/auth';
+import { signInWithCredential, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { auth } from './firebase';
 
 export class GoogleAuthWebService {
@@ -12,11 +12,10 @@ export class GoogleAuthWebService {
       provider.addScope('profile');
       
       // Use signInWithPopup which handles COOP better than custom OAuth flow
-      const result = await import('firebase/auth').then(({ signInWithPopup }) => 
-        signInWithPopup(auth, provider)
-      );
+      const result = await signInWithPopup(auth, provider);
       
-      console.log('🔴 User signed in successfully:', result.user.uid);
+      console.log('🔴 Web Google Sign-In successful:', result.user.uid);
+      console.log('🔴 User email:', result.user.email);
       return {
         user: result.user,
         error: null,

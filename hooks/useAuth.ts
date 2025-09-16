@@ -1,134 +1,72 @@
 import { useEffect, useState } from 'react';
 import {
-  getAuth,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   updateProfile,
-  GoogleAuthProvider,
-  signInWithCredential,
-  signInWithPopup,
   User,
 } from 'firebase/auth';
-import { auth, googleProvider } from '@/lib/firebase';
-import { supabase } from '@/lib/supabase';
+import { auth, db } from '@/lib/firebase'; // Ensure you import `db`
+import { doc, setDoc, getDoc } from 'firebase/firestore'; // Import Firestore functions
 import { Alert } from 'react-native';
 import { GoogleAuthService } from '@/lib/googleAuth';
 
-// Extend the User type to include the properties we need
-export type ExtendedUser = User & {
-  id?: string;
-  user_metadata?: {
-    full_name?: string;
-  };
-  email?: string | null;
-  uid?: string;
+// Use the standard Firebase User type and add any custom properties as needed.
+export type AppUser = User & {
+  uid: string;
+  
 };
 
-// Utility function to convert Firebase user ID to UUID format
-function firebaseIdToUUID(firebaseId: string): string {
-  // Create a deterministic UUID v5 from the Firebase ID
-  // This ensures the same Firebase ID always generates the same UUID
-  
-  // Simple hash function to create a deterministic UUID
-  let hash = 0;
-  for (let i = 0; i < firebaseId.length; i++) {
-    const char = firebaseId.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
+// Function to create or update a user document in Firestore
+async function createOrUpdateUserDocument(user: User) {
+  if (!user || !user.uid) return;
+
+  const userDocRef = doc(db, 'users', user.uid);
+
+  // Check if the document already exists to avoid overwriting
+  const docSnap = await getDoc(userDocRef);
+  if (docSnap.exists()) {
+    console.log('🔴 User document already exists, skipping creation.');
+    // You could update fields here if needed
+    return;
   }
-  
-  // Convert hash to a UUID-like string
-  const hashStr = Math.abs(hash).toString(16).padStart(8, '0');
-  const part1 = hashStr.substring(0, 8);
-  const part2 = hashStr.substring(8, 12) || '0000';
-  const part3 = '4' + (hashStr.substring(12, 15) || '000');
-  const part4 = '8' + (hashStr.substring(15, 18) || '000');
-  const part5 = hashStr.substring(18, 30) || '000000000000';
-  const paddedPart5 = part5.padEnd(12, '0');
-  
-  const uuid = `${part1}-${part2}-${part3}-${part4}-${paddedPart5}`;
-  
-  return uuid;
-}
 
-// Function to sync Firebase user with Supabase
-async function syncUserWithSupabase(firebaseUser: User) {
   try {
-    const userId = firebaseIdToUUID(firebaseUser.uid);
-    console.log('🔴 Syncing Firebase user with Supabase:', userId);
-    
-    // Check if profile already exists
-    const { data: existingProfile, error: fetchError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single();
-
-    if (fetchError && fetchError.code !== 'PGRST116') {
-      console.error('🔴 Error checking profile:', fetchError);
-      return;
-    }
-
-    if (!existingProfile) {
-      // Create profile if it doesn't exist
-      console.log('🔴 Creating new profile for user:', userId);
-      const { data: newProfile, error: createError } = await supabase
-        .from('profiles')
-        .insert({
-          id: userId,
-          full_name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-          email: firebaseUser.email,
-          journey_start_date: new Date().toISOString().split('T')[0]
-        })
-        .select()
-        .single();
-
-      if (createError) {
-        console.error('🔴 Error creating profile:', createError);
-        return;
-      }
-
-      console.log('🔴 Profile created successfully:', newProfile);
-    } else {
-      console.log('🔴 Profile already exists:', existingProfile);
-    }
+    // Create the new user document
+    await setDoc(userDocRef, {
+      uid: user.uid,
+      email: user.email,
+      full_name: user.displayName || user.email?.split('@')[0],
+      journey_start_date: new Date().toISOString(),
+      // Add any other default user data you need
+    });
+    console.log('🔴 User document created successfully!');
   } catch (error) {
-    console.error('🔴 Error syncing user with Supabase:', error);
+    console.error('🔴 Error creating user document:', error);
   }
 }
 
 export function useAuth() {
-  const [user, setUser] = useState<ExtendedUser | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   const isAuthenticated = !!user;
 
+  // Real-time listener for Firebase Auth state changes
   useEffect(() => {
-    const subscriber = onAuthStateChanged(auth, async (currentUser) => {
+  const subscriber = onAuthStateChanged(auth, async (currentUser) => {
       console.log('🔴 Auth state changed:', currentUser ? 'User signed in' : 'User signed out');
-
+      
       if (currentUser) {
-        // Sync Firebase user with Supabase
-        await syncUserWithSupabase(currentUser);
-
-        // Add the id property to the user object, converting Firebase ID to UUID
-        const extendedUser = {
+        const appUser: AppUser = {
           ...currentUser,
-          id: firebaseIdToUUID(currentUser.uid),
-          user_metadata: {
-            full_name: currentUser.displayName || undefined
-          },
-          email: currentUser.email || null,
           uid: currentUser.uid,
-        } as ExtendedUser;
-
-        setUser(extendedUser);
+        };
+        setUser(appUser);
       } else {
         setUser(null);
       }
-
       setLoading(false);
     });
     return subscriber; // unsubscribe on unmount
@@ -137,23 +75,19 @@ export function useAuth() {
   const signInWithEmail = async (email: string, password: string) => {
     try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      console.log('🔴 Firebase sign in successful');
+      
+      // Call the function to create a document for a new user
+      await createOrUpdateUserDocument(userCredential.user);
 
-      // Sync with Supabase after successful sign in
-      await syncUserWithSupabase(userCredential.user);
-
-      // Convert the user to include the UUID id
-      const extendedUser = {
+      const appUser: AppUser = {
         ...userCredential.user,
-        id: firebaseIdToUUID(userCredential.user.uid),
-        user_metadata: {
-          full_name: userCredential.user.displayName || undefined
-        },
-        email: userCredential.user.email || null,
         uid: userCredential.user.uid,
-      } as ExtendedUser;
-      return { data: { user: extendedUser }, error: null };
+      };
+      
+      return { data: { user: appUser }, error: null };
     } catch (error: any) {
-      console.error('Error during sign in:', error);
+      console.error('🔴 Error during sign in:', error);
       return {
         data: null,
         error: {
@@ -173,24 +107,18 @@ export function useAuth() {
           displayName: fullName,
         });
       }
-
-      // Sync with Supabase after successful sign up
-      await syncUserWithSupabase(userCredential.user);
-
-      // Convert the user to include the UUID id
-      const extendedUser = {
+      
+      // Call the function to create a document for the new user
+      await createOrUpdateUserDocument(userCredential.user);
+      
+      const appUser: AppUser = {
         ...userCredential.user,
-        id: firebaseIdToUUID(userCredential.user.uid),
-        user_metadata: {
-          full_name: fullName
-        },
-        email: userCredential.user.email || null,
         uid: userCredential.user.uid,
-      } as ExtendedUser;
-
-      return { data: { user: extendedUser }, error: null };
+      };
+      
+      return { data: { user: appUser }, error: null };
     } catch (error: any) {
-      console.error('Error during sign up:', error);
+      console.error('🔴 Error during sign up:', error);
       return {
         data: null,
         error: {
@@ -203,23 +131,8 @@ export function useAuth() {
 
   const signOut = async () => {
     try {
-      console.log('🔴 Starting sign out process...');
-      
-      // Clear any local storage or cached data
-      try {
-        // Clear any auth-related data from AsyncStorage if needed
-        // This can help with persistent login issues
-      } catch (storageError) {
-        console.warn('🔴 Warning: Could not clear local storage:', storageError);
-      }
-      
-      // Sign out from Firebase
       await firebaseSignOut(auth);
       console.log('🔴 Firebase sign out successful');
-
-      // Force clear the user state immediately
-      setUser(null);
-      
       return { error: null };
     } catch (error: any) {
       console.error('🔴 Error during sign out:', error);
@@ -240,34 +153,26 @@ export function useAuth() {
     try {
       console.log('🔴 Starting Google Sign-In...');
       
-      // Use the Google Auth Service
       const result = await GoogleAuthService.signInWithGoogleFirebase();
       
       if (result.error) {
         console.error('🔴 Google Sign-In error:', result.error);
-        return {
-          data: null,
-          error: result.error,
-        };
+        return { data: null, error: result.error };
       }
 
       if (result.user) {
-        // Sync with Supabase after successful sign in
-        await syncUserWithSupabase(result.user);
+        console.log('🔴 Google Sign-In completed successfully in useAuth');
         
-        // Convert the user to include the UUID id
-        const extendedUser = {
+        // Call the function to create a document for the new user
+        await createOrUpdateUserDocument(result.user);
+        
+        const appUser: AppUser = {
           ...result.user,
-          id: firebaseIdToUUID(result.user.uid),
-          user_metadata: {
-            full_name: result.user.displayName || undefined
-          },
-          email: result.user.email || null,
           uid: result.user.uid,
-        } as ExtendedUser;
+        };
 
-        console.log('🔴 Google Sign-In successful:', extendedUser.uid);
-        return { data: { user: extendedUser }, error: null };
+        console.log('🔴 Google Sign-In successful:', appUser.uid);
+        return { data: { user: appUser }, error: null };
       }
 
       return {
@@ -279,6 +184,17 @@ export function useAuth() {
       };
     } catch (error: any) {
       console.error('🔴 Error during Google sign in:', error);
+      
+      if (error.code === 'oauth-config-error' || error.message?.includes('OAuth configuration')) {
+        return {
+          data: null,
+          error: {
+            message: 'Google OAuth configuration error. Please check your redirect URIs in Google Cloud Console.',
+            code: 'oauth-config-error',
+          },
+        };
+      }
+      
       return {
         data: null,
         error: {

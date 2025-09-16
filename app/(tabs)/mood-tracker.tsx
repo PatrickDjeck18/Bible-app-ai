@@ -16,8 +16,6 @@ import {
   TouchableWithoutFeedback,
   Keyboard,
   ActivityIndicator,
-  Share,
-  Linking,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { 
@@ -28,24 +26,33 @@ import {
   Clock,
   ArrowLeft,
   TrendingUp,
-  BarChart3,
-  Heart,
-  Brain,
-  Calendar,
-  Sparkles,
-  Target,
-  Award,
-  Zap,
 } from 'lucide-react-native';
+import { 
+  collection, 
+  addDoc, 
+  query, 
+  where, 
+  getDocs, 
+  orderBy, 
+  limit, 
+  doc, 
+  deleteDoc, 
+  getDoc,
+  setDoc,
+  updateDoc
+} from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 import { Colors, Typography, Spacing, BorderRadius, Shadows } from '../../constants/DesignTokens';
 import { useAuth } from '../../hooks/useAuth';
 import BackgroundGradient from '@/components/BackgroundGradient';
 import { router } from 'expo-router';
 import { useMoodTracker } from '../../hooks/useMoodTracker';
-import { createFirebaseSupabaseClient } from '../../lib/supabase';
+import { emitMoodEntrySaved } from '../../lib/eventEmitter';
+import MoodCalendar from '@/components/MoodCalendar';
+import { moodCategories } from '../../constants/moods';
+import MoodAnalysis from '@/components/MoodAnalysis';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
-const numColumns = screenWidth < 340 ? 6 : 7;
 
 // Enhanced responsive breakpoints
 const isSmallScreen = screenWidth < 375;
@@ -88,86 +95,6 @@ const getGridColumns = (moodCount: number) => {
   }
 };
 
-// Enhanced mood data with better categorization and colors
-const moodCategories = {
-  positive: {
-    title: 'Positive',
-    icon: '✨',
-    moods: [
-      { id: 'positive_001_blessed', label: '🙏 Blessed', color: '#FFD700', gradient: ['#FFD700', '#FFA500', '#FF8C00'] as const },
-      { id: 'positive_002_happy', label: '😊 Happy', color: '#10B981', gradient: ['#10B981', '#059669', '#047857'] as const },
-      { id: 'positive_003_joyful', label: '😄 Joyful', color: '#22C55E', gradient: ['#22C55E', '#16A34A', '#15803D'] as const },
-      { id: 'positive_004_grateful', label: '🙏 Grateful', color: '#84CC16', gradient: ['#84CC16', '#65A30D', '#4D7C0F'] as const },
-      { id: 'positive_005_excited', label: '🤩 Excited', color: '#F59E0B', gradient: ['#F59E0B', '#D97706', '#B45309'] as const },
-      { id: 'positive_006_loved', label: '💕 Loved', color: '#EC4899', gradient: ['#EC4899', '#DB2777', '#BE185D'] as const },
-      { id: 'positive_007_proud', label: '🏆 Proud', color: '#10B981', gradient: ['#10B981', '#059669', '#047857'] as const },
-    ]
-  },
-  calm: {
-    title: 'Calm',
-    icon: '🧘',
-    moods: [
-      { id: 'calm_001_peaceful', label: '😇 Peaceful', color: '#06B6D4', gradient: ['#06B6D4', '#0891B2', '#0E7490'] as const },
-      { id: 'calm_002_calm', label: '😌 Calm', color: '#3B82F6', gradient: ['#3B82F6', '#2563EB', '#1D4ED8'] as const },
-      { id: 'calm_003_content', label: '😊 Content', color: '#8B5CF6', gradient: ['#8B5CF6', '#7C3AED', '#6D28D9'] as const },
-      { id: 'calm_004_prayerful', label: '🙏 Prayerful', color: '#8B5CF6', gradient: ['#8B5CF6', '#7C3AED', '#6D28D9'] as const },
-    ]
-  },
-  energetic: {
-    title: 'Energetic',
-    icon: '⚡',
-    moods: [
-      { id: 'energetic_001_motivated', label: '💪 Motivated', color: '#10B981', gradient: ['#10B981', '#059669', '#047857'] as const },
-      { id: 'energetic_002_focused', label: '🎯 Focused', color: '#3B82F6', gradient: ['#3B82F6', '#2563EB', '#1D4ED8'] as const },
-      { id: 'energetic_003_creative', label: '🎨 Creative', color: '#8B5CF6', gradient: ['#8B5CF6', '#7C3AED', '#6D28D9'] as const },
-      { id: 'energetic_004_inspired', label: '✨ Inspired', color: '#EC4899', gradient: ['#EC4899', '#DB2777', '#BE185D'] as const },
-      { id: 'energetic_005_accomplished', label: '🎉 Accomplished', color: '#22C55E', gradient: ['#22C55E', '#16A34A', '#15803D'] as const },
-    ]
-  },
-  challenging: {
-    title: 'Challenging',
-    icon: '💭',
-    moods: [
-      { id: 'challenging_001_sad', label: '😔 Sad', color: '#6B7280', gradient: ['#6B7280', '#4B5563', '#374151'] as const },
-      { id: 'challenging_002_anxious', label: '😰 Anxious', color: '#8B5CF6', gradient: ['#8B5CF6', '#7C3AED', '#6D28D9'] as const },
-      { id: 'challenging_003_stressed', label: '😓 Stressed', color: '#EC4899', gradient: ['#EC4899', '#DB2777', '#BE185D'] as const },
-      { id: 'challenging_004_angry', label: '😠 Angry', color: '#EF4444', gradient: ['#EF4444', '#DC2626', '#B91C1C'] as const },
-      { id: 'challenging_005_frustrated', label: '😤 Frustrated', color: '#F97316', gradient: ['#F97316', '#EA580C', '#C2410C'] as const },
-      { id: 'challenging_006_tired', label: '😴 Tired', color: '#A855F7', gradient: ['#A855F7', '#9333EA', '#7C3AED'] as const },
-      { id: 'challenging_007_lonely', label: '🥺 Lonely', color: '#6B7280', gradient: ['#6B7280', '#4B5563', '#374151'] as const },
-      { id: 'challenging_008_confused', label: '😕 Confused', color: '#F59E0B', gradient: ['#F59E0B', '#D97706', '#B45309'] as const },
-      { id: 'challenging_009_fearful', label: '😨 Fearful', color: '#DC2626', gradient: ['#DC2626', '#B91C1C', '#991B1B'] as const },
-    ]
-  },
-  curious: {
-    title: 'Curious',
-    icon: '🤔',
-    moods: [
-      { id: 'curious_001_curious', label: '🤔 Curious', color: '#14B8A6', gradient: ['#14B8A6', '#0D9488', '#0F766E'] as const },
-      { id: 'curious_002_surprised', label: '😲 Surprised', color: '#FBBF24', gradient: ['#FBBF24', '#F59E0B', '#D97706'] as const },
-      { id: 'curious_003_hopeful', label: '🌟 Hopeful', color: '#FBBF24', gradient: ['#FBBF24', '#F59E0B', '#D97706'] as const },
-    ]
-  },
-  spiritual: {
-    title: 'Spiritual',
-    icon: '🕊️',
-    moods: [
-      { id: 'spiritual_001_inspired', label: '✨ Inspired', color: '#A78BFA', gradient: ['#A78BFA', '#8B5CF6', '#7C3AED'] as const },
-      { id: 'spiritual_002_connected', label: '🔗 Connected', color: '#6EE7B7', gradient: ['#6EE7B7', '#34D399', '#10B981'] as const },
-      { id: 'spiritual_003_faithful', label: '✝️ Faithful', color: '#F472B6', gradient: ['#F472B6', '#EC4899', '#DB2777'] as const },
-    ]
-  },
-  health: {
-    title: 'Health',
-    icon: '💪',
-    moods: [
-      { id: 'health_001_healthy', label: '🍎 Healthy', color: '#6EE7B7', gradient: ['#6EE7B7', '#34D399', '#10B981'] as const },
-      { id: 'health_002_rested', label: '😴 Rested', color: '#A78BFA', gradient: ['#A78BFA', '#8B5CF6', '#7C3AED'] as const },
-      { id: 'health_003_balanced', label: '🧘 Balanced', color: '#F472B6', gradient: ['#F472B6', '#EC4899', '#DB2777'] as const },
-    ]
-  }
-};
-
 // Type for mood data
 type MoodData = {
   id: string;
@@ -178,21 +105,20 @@ type MoodData = {
 
 // Flatten all moods for easy access with proper typing
 const buildAllMoods = (): MoodData[] => {
-	const result: MoodData[] = [];
-	const categories = Object.values(moodCategories || {});
-	for (const category of categories) {
-		const moods = (category as any)?.moods || [];
-		for (const mood of moods) {
-			result.push({
-				...mood,
-				gradient: (mood.gradient as readonly [string, string, string])
-			});
-		}
-	}
-	return result;
+  const result: MoodData[] = [];
+  const categories = Object.values(moodCategories || {});
+  for (const category of categories) {
+    const moods = (category as any)?.moods || [];
+    for (const mood of moods) {
+      result.push({
+        ...mood,
+        gradient: (mood.gradient as readonly [string, string, string])
+      });
+    }
+  }
+  return result;
 };
 const allMoods: MoodData[] = buildAllMoods();
-console.log('All available moods:', allMoods.map(m => ({ id: m.id, label: m.label })));
 
 interface MoodEntry {
   id: string;
@@ -200,7 +126,7 @@ interface MoodEntry {
   mood_type: string;
   emoji: string;
   notes: string;
-  created_at: string;
+  created_at: any;
   intensity_rating?: number;
 }
 
@@ -209,6 +135,7 @@ const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
 export default function MoodTrackerScreen() {
   const { user, isAuthenticated, loading: authLoading } = useAuth();
+  const { addMoodEntryToState } = useMoodTracker();
   const [selectedMood, setSelectedMood] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
   const [moodHistory, setMoodHistory] = useState<MoodEntry[]>([]);
@@ -217,41 +144,25 @@ export default function MoodTrackerScreen() {
   const [overlayInteractive, setOverlayInteractive] = useState(false);
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [entryToDelete, setEntryToDelete] = useState<string | null>(null);
-  const [showInsights, setShowInsights] = useState(false);
   const [weeklyTrends, setWeeklyTrends] = useState<any[]>([]);
-  const [aiInsights, setAiInsights] = useState<string>('');
-  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [moodForAnalysis, setMoodForAnalysis] = useState<any>(null);
 
-  // Debug modal visibility
-  useEffect(() => {
-    console.log('Delete modal visibility changed:', deleteModalVisible);
-  }, [deleteModalVisible]);
-  
   // Animation values
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(screenHeight)).current;
   const scaleAnim = useRef(new Animated.Value(0.9)).current;
 
   useEffect(() => {
-    console.log('🔴 Mood Tracker - Auth state changed:', { 
-      user: user?.id, 
-      isAuthenticated, 
-      authLoading 
-    });
-    
-    if (user?.id && !authLoading) {
-      console.log('🔴 Fetching mood history for user:', user.id);
+    if (user?.uid && !authLoading) {
       fetchMoodHistory();
-    } else if (!user?.id && !authLoading) {
-      console.log('🔴 No user, clearing mood history');
+    } else if (!user?.uid && !authLoading) {
       setMoodHistory([]);
     }
-  }, [user?.id, isAuthenticated, authLoading]); // Refetch when auth state changes
+  }, [user?.uid, isAuthenticated, authLoading]);
 
   useEffect(() => {
-    console.log('Modal visible state changed:', modalVisible);
     if (modalVisible) {
-      // Animate modal in
       Animated.parallel([
         Animated.timing(fadeAnim, {
           toValue: 1,
@@ -274,7 +185,6 @@ export default function MoodTrackerScreen() {
         setOverlayInteractive(true);
       });
     } else {
-      // Animate modal out
       setOverlayInteractive(false);
       Animated.parallel([
         Animated.timing(fadeAnim, {
@@ -298,50 +208,37 @@ export default function MoodTrackerScreen() {
 
   const fetchMoodHistory = async () => {
     try {
-      if (!user?.id) {
-        console.log('No authenticated user found');
+      if (!user?.uid) {
         setMoodHistory([]);
         return;
       }
+      const moodsRef = collection(db, 'mood_entries');
+      const q = query(
+        moodsRef,
+        where('user_id', '==', user.uid),
+        orderBy('created_at', 'desc'),
+        limit(20)
+      );
 
-      // Use the user ID from the auth hook
-      const userId = user.id;
-
-      // Create a Supabase client with Firebase auth headers
-      const firebaseSupabase = createFirebaseSupabaseClient(user);
-
-      const { data, error } = await firebaseSupabase
-        .from('mood_entries')
-        .select('*, intensity_rating')
-        .eq('user_id', userId)
-        .neq('mood_type', 'DELETED') // Filter out deleted entries
-        .order('created_at', { ascending: false })
-        .limit(20);
-
-      if (error) throw error;
-
-      const mapped = (data || []).map((row: any) => ({
-        id: row.id,
-        mood_id: row.mood_id || 'calm_003_content', // Use stored mood_id or fallback
-        mood_type: row.mood_type || 'Neutral',
-        emoji: row.emoji || '🙂',
-        notes: row.note || '',
-        created_at: row.created_at || row.entry_date,
-        intensity_rating: row.intensity_rating || null,
-      }));
-
-      // Debug logging for mood history
-      console.log('=== MOOD HISTORY DEBUG ===');
-      console.log('Raw data from database:', data);
-      console.log('Mapped mood history:', mapped);
-      console.log('=== END MOOD HISTORY DEBUG ===');
+      const querySnapshot = await getDocs(q);
+      
+      const mapped = querySnapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          mood_id: data.mood_id || 'calm_003_content',
+          mood_type: data.mood_type || 'Neutral',
+          emoji: data.emoji || '🙂',
+          notes: data.note || '',
+          created_at: data.created_at?.toDate() || new Date(),
+          intensity_rating: data.intensity_rating || null,
+        };
+      });
 
       setMoodHistory(mapped);
       
-      // Generate AI insights and weekly trends when mood history is updated
       if (mapped.length > 0) {
         generateWeeklyTrends(mapped);
-        generateAIInsights(mapped);
       }
     } catch (error) {
       console.error('Error fetching mood history:', error);
@@ -349,20 +246,18 @@ export default function MoodTrackerScreen() {
   };
 
   const generateWeeklyTrends = (entries: MoodEntry[]) => {
-    // Group entries by day of week
     const weeklyData = entries.reduce((acc, entry) => {
       const date = new Date(entry.created_at);
       const dayOfWeek = date.getDay(); // 0 = Sunday, 1 = Monday, etc.
       const moodData = getMoodData(entry.mood_id);
       
-      // Calculate mood score (1-10 scale based on mood category)
-      let moodScore = 5; // neutral
+      let moodScore = 5;
       if (moodData.label.includes('😊') || moodData.label.includes('😄') || moodData.label.includes('🙏')) {
-        moodScore = 8; // positive
+        moodScore = 8;
       } else if (moodData.label.includes('😐') || moodData.label.includes('😌')) {
-        moodScore = 5; // neutral
+        moodScore = 5;
       } else {
-        moodScore = 3; // negative
+        moodScore = 3;
       }
       
       if (!acc[dayOfWeek]) {
@@ -375,67 +270,14 @@ export default function MoodTrackerScreen() {
       return acc;
     }, {} as Record<number, { total: number; count: number; moods: string[] }>);
 
-    // Calculate average mood for each day
     const trends = Object.entries(weeklyData).map(([day, data]) => ({
       day: parseInt(day),
       averageMood: data.count > 0 ? Math.round((data.total / data.count) * 10) / 10 : 0,
       moodCount: data.count,
-      commonMoods: data.moods.slice(0, 3) // Top 3 moods for that day
+      commonMoods: data.moods.slice(0, 3)
     }));
 
     setWeeklyTrends(trends);
-  };
-
-  const generateAIInsights = async (entries: MoodEntry[]) => {
-    if (entries.length < 3) return; // Need at least 3 entries for meaningful insights
-    
-    setInsightsLoading(true);
-    try {
-      // Simple AI insights based on mood patterns
-      const positiveCount = entries.filter(entry => {
-        const moodData = getMoodData(entry.mood_id);
-        return moodData.label.includes('😊') || moodData.label.includes('😄') || moodData.label.includes('🙏');
-      }).length;
-
-      const negativeCount = entries.filter(entry => {
-        const moodData = getMoodData(entry.mood_id);
-        return !(moodData.label.includes('😊') || moodData.label.includes('😄') || moodData.label.includes('🙏') || 
-                moodData.label.includes('😐') || moodData.label.includes('😌'));
-      }).length;
-
-      const totalEntries = entries.length;
-      const positivePercentage = Math.round((positiveCount / totalEntries) * 100);
-      const negativePercentage = Math.round((negativeCount / totalEntries) * 100);
-
-      let insight = '';
-      
-      if (positivePercentage >= 70) {
-        insight = `🌟 Amazing! You've been feeling positive ${positivePercentage}% of the time. Keep up the great energy and spiritual connection!`;
-      } else if (positivePercentage >= 50) {
-        insight = `✨ Good balance! You're maintaining positive vibes ${positivePercentage}% of the time. Consider what activities boost your mood.`;
-      } else if (negativePercentage >= 40) {
-        insight = `💭 I notice you've had some challenging moments (${negativePercentage}% of entries). Remember that every emotion is valid and part of your spiritual journey.`;
-      } else {
-        insight = `📊 Your mood patterns show a healthy mix of emotions. You're ${positivePercentage}% positive, which is a great foundation for spiritual growth.`;
-      }
-
-      // Add time-based insights
-      const morningEntries = entries.filter(entry => {
-        const hour = new Date(entry.created_at).getHours();
-        return hour >= 6 && hour < 12;
-      }).length;
-
-      if (morningEntries / totalEntries > 0.4) {
-        insight += ' Your morning entries show consistent engagement - great devotional habit!';
-      }
-
-      setAiInsights(insight);
-    } catch (error) {
-      console.error('Error generating AI insights:', error);
-      setAiInsights('Analyzing your mood patterns... Insights will appear as you track more moods.');
-    } finally {
-      setInsightsLoading(false);
-    }
   };
 
   const saveMood = async () => {
@@ -444,89 +286,48 @@ export default function MoodTrackerScreen() {
       return;
     }
 
-    if (authLoading) {
-      Alert.alert('Please Wait', 'Authentication is still loading. Please try again in a moment.');
-      return;
-    }
-
-    if (!user?.id) {
-      Alert.alert('Authentication Required', 'You need to sign in to save moods.');
+    if (authLoading || !user?.uid) {
+      Alert.alert('Authentication Required', 'You need to be signed in to save moods.');
       return;
     }
 
     setMoodLoading(true);
     
     try {
-      // Use the user ID from the auth hook
-      const userId = user.id;
+      const userId = user.uid;
 
-      // Create a Supabase client with Firebase auth headers
-      const firebaseSupabase = createFirebaseSupabaseClient(user);
-
-      // Ensure user profile exists before saving mood
-      console.log('Checking if profile exists for user:', userId);
-      const { data: existingProfile, error: profileError } = await firebaseSupabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
-
-      if (profileError) {
-        console.log('Profile check error:', profileError);
-        // If profile doesn't exist (PGRST116) or any other error, try to create it
-        console.log('Attempting to create profile for user:', userId);
-        const { data: newProfile, error: createError } = await firebaseSupabase
-          .from('profiles')
-          .insert({
-            id: userId,
-            full_name: user.displayName || user.email?.split('@')[0] || 'User',
-            email: user.email,
-            journey_start_date: new Date().toISOString().split('T')[0]
-          })
-          .select()
-          .single();
-
-        if (createError) {
-          console.error('Error creating profile:', createError);
-          throw new Error(`Failed to create user profile: ${createError.message}`);
-        } else {
-          console.log('Profile created successfully:', newProfile);
-        }
-      } else {
-        console.log('Profile already exists:', existingProfile);
+      // Check if user profile exists in Firestore (optional but good practice)
+      const profileRef = doc(db, 'profiles', userId);
+      const profileSnap = await getDoc(profileRef);
+      if (!profileSnap.exists()) {
+        await setDoc(profileRef, {
+          full_name: user.displayName || user.email?.split('@')[0] || 'User',
+          email: user.email,
+          journey_start_date: new Date().toISOString(),
+        });
       }
 
       const findMoodData = (moodId: string) => {
-        console.log('Finding mood data for ID:', moodId);
         const mood = allMoods.find(m => m.id === moodId);
-        console.log('Found mood:', mood);
         if (!mood) return { emoji: '🙂', type: 'Neutral' as const, rating: 6 };
         const emoji = mood.label.split(' ')[0];
-        // Map mood id to allowed mood_type with more specific mapping
-        const map: Record<string, { type: 'Sad'|'Worried'|'Neutral'|'Happy'|'Joyful'|'Anxious'|'Peaceful'|'Excited'|'Calm'|'Stressed'; rating: number }>= {
-          // Positive moods - more specific mapping
+        const map: Record<string, { type: string; rating: number }>= {
           positive_001_blessed: { type: 'Joyful', rating: 9 },
           positive_002_happy: { type: 'Happy', rating: 8 },
           positive_003_joyful: { type: 'Joyful', rating: 9 },
-          positive_004_grateful: { type: 'Joyful', rating: 8 },
+          positive_004_grateful: { type: 'Grateful', rating: 8 },
           positive_005_excited: { type: 'Excited', rating: 8 },
           positive_006_loved: { type: 'Joyful', rating: 8 },
           positive_007_proud: { type: 'Joyful', rating: 8 },
-
-          // Calm moods
           calm_001_peaceful: { type: 'Peaceful', rating: 7 },
           calm_002_calm: { type: 'Calm', rating: 6 },
           calm_003_content: { type: 'Neutral', rating: 6 },
           calm_004_prayerful: { type: 'Peaceful', rating: 7 },
-
-          // Energetic moods
           energetic_001_motivated: { type: 'Excited', rating: 8 },
           energetic_002_focused: { type: 'Excited', rating: 7 },
           energetic_003_creative: { type: 'Excited', rating: 7 },
           energetic_004_inspired: { type: 'Excited', rating: 8 },
           energetic_005_accomplished: { type: 'Joyful', rating: 9 },
-
-          // Challenging moods
           challenging_001_sad: { type: 'Sad', rating: 3 },
           challenging_002_anxious: { type: 'Anxious', rating: 3 },
           challenging_003_stressed: { type: 'Stressed', rating: 3 },
@@ -536,89 +337,52 @@ export default function MoodTrackerScreen() {
           challenging_007_lonely: { type: 'Sad', rating: 3 },
           challenging_008_confused: { type: 'Worried', rating: 4 },
           challenging_009_fearful: { type: 'Anxious', rating: 2 },
-
-          // Curious moods
           curious_001_curious: { type: 'Neutral', rating: 5 },
           curious_002_surprised: { type: 'Excited', rating: 7 },
           curious_003_hopeful: { type: 'Joyful', rating: 7 },
-
-          // Spiritual moods
           spiritual_001_inspired: { type: 'Joyful', rating: 8 },
           spiritual_002_connected: { type: 'Peaceful', rating: 7 },
           spiritual_003_faithful: { type: 'Peaceful', rating: 7 },
-
-          // Health moods
           health_001_healthy: { type: 'Calm', rating: 7 },
           health_002_rested: { type: 'Peaceful', rating: 7 },
           health_003_balanced: { type: 'Calm', rating: 6 },
         };
-        const mapped = map[moodId as keyof typeof map] || { type: 'Neutral' as const, rating: 6 };
+        const mapped = map[moodId] || { type: 'Neutral', rating: 6 };
         return { emoji, ...mapped };
       };
 
       const { emoji, type: mood_type, rating: intensity_rating } = findMoodData(selectedMood);
-      const entry_date = new Date().toISOString().split('T')[0];
 
-      // Enhanced debug logging to see what's being saved
-      console.log('=== SAVE MOOD DEBUG ===');
-      console.log('Selected mood ID:', selectedMood);
-      console.log('Mood type being saved:', mood_type);
-      console.log('Intensity rating:', intensity_rating);
-      console.log('Emoji:', emoji);
-      console.log('Notes:', notes);
-      console.log('User ID:', userId);
-      console.log('Entry date:', entry_date);
-      console.log('=== END SAVE DEBUG ===');
-
-      // Insert mood data with the correct schema
-      const insertData = {
-        user_id: existingProfile?.id || userId, // Use profile ID if available, fallback to user ID
-        entry_date,
-        mood_id: selectedMood, // Store the specific mood ID
+      const newMoodRef = await addDoc(collection(db, 'mood_entries'), {
+        user_id: userId,
+        mood_id: selectedMood,
         mood_type,
         intensity_rating,
         emoji,
         note: notes.trim() || null,
+        created_at: new Date(),
+      });
+      
+      const now = new Date();
+      const newEntry = {
+        id: newMoodRef.id,
+        user_id: userId,
+        mood_id: selectedMood,
+        mood_type,
+        emoji,
+        note: notes.trim() || '',
+        notes: notes.trim() || '',
+        created_at: now,
+        entry_date: now,
+        updated_at: now,
+        intensity_rating,
       };
 
-      console.log('=== INSERT DEBUG ===');
-      console.log('Insert data:', JSON.stringify(insertData, null, 2));
-      console.log('User ID being used:', existingProfile?.id || userId);
-      console.log('Profile ID available:', existingProfile?.id);
-      console.log('Firebase User ID:', userId);
-      console.log('=== END INSERT DEBUG ===');
-
-      const { data, error } = await firebaseSupabase
-        .from('mood_entries')
-        .insert(insertData)
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Insert error:', error);
-        console.error('Error details:', {
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          code: error.code
-        });
-        throw error;
-      }
-
-      console.log('Insert successful:', data);
-
-      // Success animation
+      addMoodEntryToState();
+      
       Animated.sequence([
-        Animated.timing(scaleAnim, {
-          toValue: 1.05,
-          duration: 100,
-          useNativeDriver: true,
-        }),
-        Animated.timing(scaleAnim, {
-          toValue: 1,
-          duration: 100,
-          useNativeDriver: true,
-        }),
+        Animated.timing(scaleAnim, { toValue: 1.05, duration: 100, useNativeDriver: true }),
+        Animated.timing(scaleAnim, { toValue: 1, duration: 100, useNativeDriver: true }),
       ]).start();
 
       Alert.alert('Success', 'Your current mood has been recorded! 🎉');
@@ -628,13 +392,8 @@ export default function MoodTrackerScreen() {
       setModalVisible(false);
       fetchMoodHistory();
       
-      // Trigger a refresh of the mood data in the home page
-      // This will ensure the MoodTrackerCard shows the updated mood
-      // We can use a global event or state management, but for now
-      // we'll use a simple approach: broadcast a custom event
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('moodEntrySaved'));
-      }
+      emitMoodEntrySaved(newEntry);
+      
     } catch (error: any) {
       console.error('Error saving mood:', error);
       Alert.alert('Error', `Failed to save mood: ${error.message || 'Unknown error'}`);
@@ -644,103 +403,31 @@ export default function MoodTrackerScreen() {
   };
 
     const deleteMood = async (id: string) => {
-    console.log('=== DELETE MOOD DEBUG ===');
-    console.log('Attempting to delete mood with ID:', id);
-    console.log('ID type:', typeof id);
-    console.log('=== END DELETE DEBUG ===');
-
-    // Set the entry to delete and show the confirmation modal
-    console.log('Setting entry to delete and showing modal...');
-    setEntryToDelete(id);
-    setDeleteModalVisible(true);
-    console.log('Delete modal should now be visible');
+      setEntryToDelete(id);
+      setDeleteModalVisible(true);
   };
 
   const confirmDelete = async () => {
-    if (!entryToDelete) return;
-
-    if (authLoading) {
-      Alert.alert('Please Wait', 'Authentication is still loading. Please try again in a moment.');
-      return;
-    }
-
-    if (!user?.id) {
-      Alert.alert('Authentication Required', 'You need to sign in to delete moods.');
+    if (!entryToDelete || !user?.uid) {
+      cancelDelete();
       return;
     }
 
     try {
-      console.log('Starting delete process...');
+      const docRef = doc(db, 'mood_entries', entryToDelete);
+      await deleteDoc(docRef);
       
-      console.log('Current auth user ID:', user.id);
-
-      // Create a Supabase client with Firebase auth headers
-      const firebaseSupabase = createFirebaseSupabaseClient(user);
-
-      // First, let's check what's in the database
-      const { data: checkData, error: checkError } = await firebaseSupabase
-        .from('mood_entries')
-        .select('*')
-        .eq('id', entryToDelete)
-        .single();
-
-      if (checkError) {
-        console.error('Error checking entry:', checkError);
-        throw new Error(`Entry not found: ${checkError.message}`);
-      }
-
-      console.log('Found entry to delete:', checkData);
-
-      // Try to delete the entry
-      const { error: deleteError } = await firebaseSupabase
-        .from('mood_entries')
-        .delete()
-        .eq('id', entryToDelete);
-
-      if (deleteError) {
-        console.error('Delete error:', deleteError);
-        console.error('Error details:', {
-          message: deleteError.message,
-          details: deleteError.details,
-          hint: deleteError.hint,
-          code: deleteError.code
-        });
-        
-        // Try a different approach - update the entry to mark it as deleted
-        console.log('Trying alternative delete approach...');
-        const { error: updateError } = await firebaseSupabase
-          .from('mood_entries')
-          .update({ 
-            mood_type: 'DELETED',
-            emoji: '🗑️',
-            note: 'Entry marked for deletion'
-          })
-          .eq('id', entryToDelete);
-
-        if (updateError) {
-          console.error('Update error:', updateError);
-          throw new Error(`Cannot delete or update entry: ${deleteError.message}`);
-        } else {
-          console.log('Successfully marked entry for deletion');
-          Alert.alert('Success', 'Mood entry marked for deletion!');
-          fetchMoodHistory();
-          setDeleteModalVisible(false);
-          setEntryToDelete(null);
-          return;
-        }
-      }
-
-      console.log('Successfully deleted mood entry');
       Alert.alert('Success', 'Mood entry deleted successfully!');
+      
+      setMoodHistory(prevHistory => prevHistory.filter(entry => entry.id !== entryToDelete));
+      
       fetchMoodHistory();
+      
       setDeleteModalVisible(false);
       setEntryToDelete(null);
     } catch (error: any) {
       console.error('Error deleting mood:', error);
-      Alert.alert(
-        'Error', 
-        `Failed to delete mood entry: ${error.message || 'Unknown error'}`
-      );
+      Alert.alert('Error', `Failed to delete mood entry: ${error.message || 'Unknown error'}`);
       setDeleteModalVisible(false);
       setEntryToDelete(null);
     }
@@ -761,7 +448,6 @@ export default function MoodTrackerScreen() {
   };
 
   const openNewMoodModal = () => {
-    console.log('Opening new mood modal...');
     setOverlayInteractive(false);
     setModalVisible(true);
     setSelectedMood(null);
@@ -775,52 +461,7 @@ export default function MoodTrackerScreen() {
     setNotes('');
   };
 
-  const MoodButton = ({ mood, isSelected, onPress }: { mood: MoodData, isSelected: boolean, onPress: () => void }) => {
-    const animValue = useRef(new Animated.Value(0)).current;
-    useEffect(() => {
-      Animated.spring(animValue, {
-        toValue: isSelected ? 1 : 0,
-        tension: 300,
-        friction: 20,
-        useNativeDriver: true,
-      }).start();
-    }, [isSelected]);
-
-    return (
-      <AnimatedTouchable
-        activeOpacity={0.7}
-        onPress={onPress}
-        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        style={[
-          styles.moodButton,
-          { backgroundColor: mood.color },
-          isSelected && styles.moodGradientSelected,
-          {
-            transform: [
-              {
-                scale: animValue.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [1, 1.15],
-                }),
-              },
-            ],
-          },
-        ]}
-      >
-        <Text style={[styles.moodEmoji, isSelected && styles.moodEmojiSelected]}>
-          {mood.label.split(' ')[0]}
-        </Text>
-        {isSelected && (
-          <Text style={styles.moodTooltip}>
-            {mood.label.split(' ')[1]}
-          </Text>
-        )}
-      </AnimatedTouchable>
-    );
-  };
-
-  const MoodHistoryItem = ({ entry, index, onDelete }: { entry: MoodEntry, index: number, onDelete: (id: string) => void }) => {
-    // Use the stored mood_id directly
+  const MoodHistoryItem = ({ entry, index, onDelete, onAnalyze }: { entry: MoodEntry, index: number, onDelete: (id: string) => void, onAnalyze: (mood: any) => void }) => {
     const moodData = getMoodData(entry.mood_id);
     const animValue = useRef(new Animated.Value(0)).current;
 
@@ -850,7 +491,8 @@ export default function MoodTrackerScreen() {
           },
         ]}
       >
-        <LinearGradient
+        <TouchableOpacity onPress={() => onAnalyze(entry)}>
+          <LinearGradient
           colors={moodData.gradient}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
@@ -897,10 +539,7 @@ export default function MoodTrackerScreen() {
             </View>
           </View>
           <TouchableOpacity
-            onPress={() => {
-              console.log('Delete button pressed for entry ID:', entry.id);
-              onDelete(entry.id);
-            }}
+            onPress={() => onDelete(entry.id)}
             style={styles.deleteButton}
             activeOpacity={0.7}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -908,102 +547,76 @@ export default function MoodTrackerScreen() {
             <Trash2 size={16} color={Colors.error[500]} />
           </TouchableOpacity>
         </View>
+        </TouchableOpacity>
       </Animated.View>
     );
   };
-
-  // Show login prompt if not authenticated
-  console.log('🔴 Mood Tracker - Render state:', { 
-    authLoading, 
-    isAuthenticated, 
-    user: user?.id,
-    moodHistoryLength: moodHistory.length 
-  });
-
-  // Show loading state while authentication is being determined
-  if (authLoading) {
-  return (
-    <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
-      
-      <BackgroundGradient>
-        {/* Modern Header Card with Stats */}
-        <View style={styles.headerCardContainer}>
-          <LinearGradient
-            colors={Colors.gradients.divineMorning}
-            style={styles.headerCardGradient}
-          >
-            <View style={styles.headerCardContent}>
-              <TouchableOpacity style={styles.headerCardBackButton} onPress={() => router.back()}>
-                <ArrowLeft size={24} color={Colors.white} />
-              </TouchableOpacity>
-              <View style={styles.headerCardIcon}>
-                <Smile size={32} color={Colors.white} />
-              </View>
-              <View style={styles.headerCardText}>
-                <Text style={styles.headerCardTitle}>My Mood Now</Text>
-                <Text style={styles.headerCardDescription}>Track your emotional journey</Text>
-                
-                {/* Quick Stats */}
-                <View style={styles.quickStatsContainer}>
-                  <View style={styles.statItem}>
-                    <Text style={styles.statNumber}>{moodHistory.length}</Text>
-                    <Text style={styles.statLabel}>Entries</Text>
-                  </View>
-                  <View style={styles.statDivider} />
-                  <View style={styles.statItem}>
-                    <Text style={styles.statNumber}>
-                      {moodHistory.length > 0 ? Math.round(moodHistory.reduce((sum, entry) => {
-                        const moodData = getMoodData(entry.mood_id);
-                        const rating = moodData.label.includes('😊') || moodData.label.includes('😄') || moodData.label.includes('🙏') ? 8 : 
-                                     moodData.label.includes('😐') || moodData.label.includes('😌') ? 5 : 3;
-                        return sum + rating;
-                      }, 0) / moodHistory.length) : 0}/10
-                    </Text>
-                    <Text style={styles.statLabel}>Avg Mood</Text>
-                  </View>
-                  <View style={styles.statDivider} />
-                  <View style={styles.statItem}>
-                    <Text style={styles.statNumber}>
-                      {(() => {
-                        const today = new Date().toISOString().split('T')[0];
-                        const hasEntryToday = moodHistory.some(entry => 
-                          entry.created_at.includes(today)
-                        );
-                        return hasEntryToday ? '✅' : '📝';
-                      })()}
-                    </Text>
-                    <Text style={styles.statLabel}>Today</Text>
+  
+  if (authLoading || !isAuthenticated) {
+    return (
+      <View style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+        <BackgroundGradient>
+          <View style={styles.headerCardContainer}>
+            <LinearGradient
+              colors={Colors.gradients.divineMorning}
+              style={styles.headerCardGradient}
+            >
+              <View style={styles.headerCardContent}>
+                <TouchableOpacity style={styles.headerCardBackButton} onPress={() => router.back()}>
+                  <ArrowLeft size={24} color={Colors.white} />
+                </TouchableOpacity>
+                <View style={styles.headerCardIcon}>
+                  <Smile size={32} color={Colors.white} />
+                </View>
+                <View style={styles.headerCardText}>
+                  <Text style={styles.headerCardTitle}>My Mood Now</Text>
+                  <Text style={styles.headerCardDescription}>Track your emotional journey</Text>
+                  
+                  <View style={styles.quickStatsContainer}>
+                    <View style={styles.statItem}>
+                      <Text style={styles.statNumber}>-</Text>
+                      <Text style={styles.statLabel}>Entries</Text>
+                    </View>
+                    <View style={styles.statDivider} />
+                    <View style={styles.statItem}>
+                      <Text style={styles.statNumber}>-</Text>
+                      <Text style={styles.statLabel}>Avg Mood</Text>
+                    </View>
+                    <View style={styles.statDivider} />
+                    <View style={styles.statItem}>
+                      <Text style={styles.statNumber}>-</Text>
+                      <Text style={styles.statLabel}>Today</Text>
+                    </View>
                   </View>
                 </View>
+                <TouchableOpacity 
+                  style={[styles.headerCardActionButton, { backgroundColor: 'rgba(255, 255, 255, 0.2)' }]}
+                  onPress={openNewMoodModal} 
+                  activeOpacity={0.8}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Plus size={22} color={Colors.white} />
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity 
-                style={[styles.headerCardActionButton, { backgroundColor: 'rgba(255, 255, 255, 0.2)' }]}
-                onPress={openNewMoodModal} 
-                activeOpacity={0.8}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Plus size={22} color={Colors.white} />
-              </TouchableOpacity>
-            </View>
-          </LinearGradient>
-        </View>
-        <View style={styles.section}>
-          <View style={styles.emptyState}>
-            <LinearGradient
-              colors={Colors.gradients.lightGrey || ['#F9FAFB', '#F7F8F9', '#F5F6F7']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.emptyStateIcon}
-            >
-              <Smile size={48} color={Colors.neutral[300]} />
             </LinearGradient>
-            <Text style={styles.emptyStateTitle}>Sign in to continue</Text>
-            <Text style={styles.emptyStateSubtext}>
-              Please sign in to track and view your mood history
-            </Text>
           </View>
-        </View>
+          <View style={styles.section}>
+            <View style={styles.emptyState}>
+              <LinearGradient
+                colors={Colors.gradients.lightGrey || ['#F9FAFB', '#F7F8F9', '#F5F6F7']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.emptyStateIcon}
+              >
+                <Smile size={48} color={Colors.neutral[300]} />
+              </LinearGradient>
+              <Text style={styles.emptyStateTitle}>Sign in to continue</Text>
+              <Text style={styles.emptyStateSubtext}>
+                Please sign in to track and view your mood history
+              </Text>
+            </View>
+          </View>
         </BackgroundGradient>
       </View>
     );
@@ -1013,25 +626,39 @@ export default function MoodTrackerScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
       
-      <BackgroundGradient>
-        {/* Modern Header Card with Stats */}
-        <View style={styles.headerCardContainer}>
-          <LinearGradient
-            colors={Colors.gradients.spiritualLight}
-            style={styles.headerCardGradient}
+      <View style={styles.headerSimple}>
+        <View style={styles.headerSimpleContent}>
+          <View style={styles.headerSimpleLeft}>
+            <View style={styles.headerSimpleIcon}>
+              <Smile size={28} color={Colors.primary[600]} />
+            </View>
+            <View>
+              <Text style={styles.headerSimpleTitle}>Mood Tracker</Text>
+              <Text style={styles.headerSimpleSubtitle}>
+                Track your spiritual journey
+              </Text>
+            </View>
+          </View>
+          <TouchableOpacity
+            style={styles.headerSimpleAddButton}
+            onPress={openNewMoodModal}
           >
+            <Plus size={20} color={Colors.primary[600]} />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <BackgroundGradient>
+        <View style={styles.headerCardContainer}>
+          <View style={styles.headerCard}>
             <View style={styles.headerCardContent}>
-              <TouchableOpacity style={styles.headerCardBackButton} onPress={() => router.back()}>
-                <ArrowLeft size={24} color={Colors.primary[600]} />
-              </TouchableOpacity>
               <View style={styles.headerCardIcon}>
                 <Smile size={32} color={Colors.primary[600]} />
               </View>
               <View style={styles.headerCardText}>
-                <Text style={[styles.headerCardTitle, { color: Colors.neutral[900] }]}>My Mood Now</Text>
-                <Text style={[styles.headerCardDescription, { color: Colors.neutral[700] }]}>Track your emotional journey</Text>
+                <Text style={[styles.headerCardTitle, { color: Colors.neutral[900] }]}>Daily Check-in</Text>
+                <Text style={[styles.headerCardDescription, { color: Colors.neutral[700] }]}>How are you feeling today?</Text>
                 
-                {/* Quick Stats */}
                 <View style={styles.quickStatsContainer}>
                   <View style={styles.statItem}>
                     <Text style={[styles.statNumber, { color: Colors.neutral[900] }]}>{moodHistory.length}</Text>
@@ -1043,7 +670,6 @@ export default function MoodTrackerScreen() {
                       {(() => {
                         if (moodHistory.length === 0) return '0/10';
                         
-                        // Use actual intensity ratings from database (same as home page)
                         const validEntries = moodHistory.filter(entry =>
                           entry.intensity_rating !== null && entry.intensity_rating !== undefined
                         );
@@ -1066,7 +692,7 @@ export default function MoodTrackerScreen() {
                       {(() => {
                         const today = new Date().toISOString().split('T')[0];
                         const hasEntryToday = moodHistory.some(entry =>
-                          entry.created_at.includes(today)
+                          new Date(entry.created_at).toISOString().split('T')[0] === today
                         );
                         return hasEntryToday ? '✅' : '📝';
                       })()}
@@ -1084,7 +710,7 @@ export default function MoodTrackerScreen() {
                 <Plus size={22} color={Colors.primary[600]} />
               </TouchableOpacity>
             </View>
-          </LinearGradient>
+          </View>
         </View>
 
       <ScrollView 
@@ -1093,7 +719,6 @@ export default function MoodTrackerScreen() {
         contentContainerStyle={styles.scrollContent}
       >
 
-        {/* Weekly Trends Section */}
         {weeklyTrends.length > 0 && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
@@ -1133,13 +758,20 @@ export default function MoodTrackerScreen() {
           </View>
         )}
 
-        {/* Recent Moods Section */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>My Mood History</Text>
+            <TouchableOpacity
+              style={styles.toggleButton}
+              onPress={() => setShowCalendar(!showCalendar)}
+            >
+              <Text style={styles.toggleButtonText}>{showCalendar ? 'Show List' : 'Show Calendar'}</Text>
+            </TouchableOpacity>
           </View>
           
-          { (moodHistory?.length ?? 0) === 0 ? (
+          {showCalendar ? (
+            <MoodCalendar moodHistory={moodHistory} />
+          ) : (moodHistory?.length ?? 0) === 0 ? (
             <View style={styles.emptyState}>
               <LinearGradient
                 colors={Colors.gradients.lightGrey || ['#F9FAFB', '#F7F8F9', '#F5F6F7']}
@@ -1171,19 +803,17 @@ export default function MoodTrackerScreen() {
           ) : (
             <View style={styles.historyContainer}>
               {(moodHistory || []).map((entry, index) => (
-                <MoodHistoryItem key={entry.id} entry={entry} index={index} onDelete={deleteMood} />
+                <MoodHistoryItem key={entry.id} entry={entry} index={index} onDelete={deleteMood} onAnalyze={setMoodForAnalysis} />
               ))}
             </View>
           )}
         </View>
         
-        {/* Bottom spacing */}
         <View style={styles.bottomSpacing} />
       </ScrollView>
 
+      {moodForAnalysis && <MoodAnalysis mood={moodForAnalysis} onClose={() => setMoodForAnalysis(null)} />}
 
-
-      {/* Enhanced Modal */}
       <Modal
         visible={modalVisible}
         animationType="none"
@@ -1218,10 +848,8 @@ export default function MoodTrackerScreen() {
                   style={styles.keyboardAvoid}
                   keyboardVerticalOffset={Platform.OS === 'ios' ? (isSmallScreen ? 20 : 0) : 20}
                 >
-                  {/* Modal Handle */}
                   <View style={styles.modalHandle} />
                   
-                  {/* Modal Header */}
                   <View style={styles.modalHeader}>
                     <View>
                       <Text style={styles.modalTitle}>How are you feeling right now?</Text>
@@ -1244,9 +872,7 @@ export default function MoodTrackerScreen() {
                     bounces={false}
                     nestedScrollEnabled={true}
                   >
-                    {/* Modern Mood Selection */}
                     <View style={styles.modernMoodContainer}>
-                      {/* Selected Mood Preview */}
                       {selectedMood && (
                         <View style={styles.selectedMoodPreview}>
                           <LinearGradient
@@ -1265,7 +891,6 @@ export default function MoodTrackerScreen() {
                         </View>
                       )}
 
-                      {/* Mood Categories Grid */}
                       <View style={styles.modernMoodGrid}>
                         <ScrollView
                           style={styles.categoriesScrollView}
@@ -1280,69 +905,57 @@ export default function MoodTrackerScreen() {
                                 <Text style={styles.categoryCardIcon} allowFontScaling={false}>{category.icon}</Text>
                                 <Text style={styles.categoryCardTitle}>{category.title}</Text>
                               </View>
-                                                          <View style={[
-                              styles.categoryMoodGrid,
-                              { 
-                                flexDirection: 'row',
-                                flexWrap: 'wrap',
-                                gap: getResponsiveSpacing(Spacing.sm, Spacing.md, Spacing.md),
-                                paddingTop: getResponsiveSpacing(Spacing.xs, Spacing.sm, Spacing.sm),
-                              }
-                            ]}>
-                              {(category.moods || []).map(mood => (
-                                                                  <TouchableOpacity
-                                  key={mood.id}
-                                  style={[
-                                    styles.modernMoodButton,
-                                    selectedMood === mood.id && styles.modernMoodButtonSelected,
-                                    {
-                                      width: `${100 / getGridColumns(category.moods.length)}%`,
-                                      maxWidth: getResponsiveSpacing(100, 120, 140),
-                                      marginBottom: getResponsiveSpacing(Spacing.sm, Spacing.md, Spacing.md),
-                                    }
-                                  ]}
-                                    onPress={() => {
-                                      console.log('=== MOOD SELECTION DEBUG ===');
-                                      console.log('Selected mood ID:', mood.id);
-                                      console.log('Selected mood label:', mood.label);
-                                      console.log('Selected mood category:', key);
-                                      console.log('Previous selected mood:', selectedMood);
-                                      setSelectedMood(mood.id);
-                                      console.log('New selected mood set to:', mood.id);
-                                      console.log('=== END DEBUG ===');
-                                    }}
+                              <View style={[
+                                styles.categoryMoodGrid,
+                                { 
+                                  flexDirection: 'row',
+                                  flexWrap: 'wrap',
+                                  gap: getResponsiveSpacing(Spacing.sm, Spacing.md, Spacing.md),
+                                  paddingTop: getResponsiveSpacing(Spacing.xs, Spacing.sm, Spacing.sm),
+                                }
+                              ]}>
+                                {(category.moods || []).map(mood => (
+                                  <TouchableOpacity
+                                    key={mood.id}
+                                    style={[
+                                      styles.modernMoodButton,
+                                      selectedMood === mood.id && styles.modernMoodButtonSelected,
+                                      {
+                                        width: `${100 / getGridColumns(category.moods.length)}%`,
+                                        maxWidth: getResponsiveSpacing(100, 120, 140),
+                                        marginBottom: getResponsiveSpacing(Spacing.sm, Spacing.md, Spacing.md),
+                                      }
+                                    ]}
+                                    onPress={() => setSelectedMood(mood.id)}
                                     activeOpacity={0.7}
                                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                                   >
-                                                                      <Text 
-                                    style={[
-                                      styles.modernMoodEmoji,
-                                      selectedMood === mood.id && styles.modernMoodEmojiSelected
-                                    ]}
-                                    allowFontScaling={false}
-                                  >
-                                    {mood.label.split(' ')[0]}
-                                  </Text>
-                                  <Text 
-                                    style={[
-                                      styles.modernMoodText,
-                                      selectedMood === mood.id && styles.modernMoodTextSelected
-                                    ]}
-                                    allowFontScaling={false}
-                                  >
-                                    {mood.label.split(' ').slice(1).join(' ')}
-                                  </Text>
+                                    <Text 
+                                      style={[
+                                        styles.modernMoodEmoji,
+                                        selectedMood === mood.id && styles.modernMoodEmojiSelected
+                                      ]}
+                                      allowFontScaling={false}
+                                    >
+                                      {mood.label.split(' ')[0]}
+                                    </Text>
+                                    <Text 
+                                      style={[
+                                        styles.modernMoodText,
+                                        selectedMood === mood.id && styles.modernMoodTextSelected
+                                      ]}
+                                      allowFontScaling={false}
+                                    >
+                                      {mood.label.split(' ').slice(1).join(' ')}
+                                    </Text>
                                   </TouchableOpacity>
                                 ))}
                               </View>
                             </View>
                           ))}
                         </ScrollView>
-                        {/* Scroll Indicator */}
                         <View style={styles.scrollIndicator} />
                       </View>
-
-                      {/* Notes Section */}
                       <View style={styles.modernNotesSection}>
                         <Text style={styles.modernNotesTitle}>Add a note (optional)</Text>
                         <View style={styles.modernNotesInputContainer}>
@@ -1358,8 +971,6 @@ export default function MoodTrackerScreen() {
                           />
                         </View>
                       </View>
-
-                      {/* Modern Save Button */}
                       <TouchableOpacity
                         onPress={saveMood}
                         disabled={!selectedMood || moodLoading}
@@ -1396,8 +1007,6 @@ export default function MoodTrackerScreen() {
                         </LinearGradient>
                       </TouchableOpacity>
                     </View>
-
-                    {/* Bottom spacing */}
                     <View style={styles.modalBottomSpacing} />
                   </ScrollView>
                 </KeyboardAvoidingView>
@@ -1407,7 +1016,6 @@ export default function MoodTrackerScreen() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Delete Confirmation Modal */}
       <Modal
         visible={deleteModalVisible}
         animationType="fade"
@@ -1483,13 +1091,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     ...Shadows.md,
   },
-  // Header Card Styles
   headerCardContainer: {
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.lg,
     paddingTop: Platform.OS === 'ios' ? 100 : (StatusBar.currentHeight || 0) + 60,
   },
   headerCardGradient: {
+    borderRadius: BorderRadius.xl,
+    overflow: 'hidden',
+    ...Shadows.lg,
+  },
+  headerCard: {
+    backgroundColor: Colors.white,
     borderRadius: BorderRadius.xl,
     overflow: 'hidden',
     ...Shadows.lg,
@@ -1545,12 +1158,50 @@ const styles = StyleSheet.create({
     ...Shadows.md,
   },
   headerSimple: {
-    paddingTop: Platform.OS === 'ios' ? 60 : StatusBar.currentHeight! + 12,
+    paddingTop: Platform.OS === 'ios' ? 60 : (StatusBar.currentHeight || 0) + 12,
     paddingHorizontal: Spacing.lg,
     paddingBottom: Spacing.md,
-    backgroundColor: 'white',
+    backgroundColor: Colors.white,
     borderBottomWidth: 1,
     borderBottomColor: Colors.neutral[200],
+    ...Shadows.sm,
+  },
+  headerSimpleContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerSimpleLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  headerSimpleIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: BorderRadius.full,
+    backgroundColor: Colors.primary[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerSimpleTitle: {
+    fontSize: Typography.sizes['2xl'],
+    fontWeight: Typography.weights.bold,
+    color: Colors.neutral[900],
+  },
+  headerSimpleSubtitle: {
+    fontSize: Typography.sizes.sm,
+    color: Colors.neutral[600],
+    marginTop: 2,
+  },
+  headerSimpleAddButton: {
+    width: 44,
+    height: 44,
+    borderRadius: BorderRadius.full,
+    backgroundColor: Colors.primary[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Shadows.xs,
   },
   headerAddButton: {
     position: 'absolute',
@@ -1786,7 +1437,7 @@ const styles = StyleSheet.create({
     marginBottom: Platform.OS === 'ios' ? Spacing['2xl'] : Spacing.lg,
   },
   moodButton: {
-    width: (screenWidth - (Platform.OS === 'ios' ? Spacing['2xl'] : Spacing.lg) * 2 - (Platform.OS === 'ios' ? Spacing.sm : Spacing.xs) * (numColumns - 1)) / numColumns,
+    width: (screenWidth - (Platform.OS === 'ios' ? Spacing['2xl'] : Spacing.lg) * 2 - (Platform.OS === 'ios' ? Spacing.sm : Spacing.xs) * (7 - 1)) / 7,
     aspectRatio: 1,
     borderRadius: BorderRadius.lg,
     ...Shadows.sm,
@@ -2047,7 +1698,6 @@ const styles = StyleSheet.create({
     ...getEmojiStyle(18),
   },
   
-  // Delete Modal Styles
   deleteModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -2116,7 +1766,6 @@ const styles = StyleSheet.create({
     fontWeight: Typography.weights.medium,
     color: 'white',
   },
-  // Quick Stats Styles
   quickStatsContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2148,15 +1797,20 @@ const styles = StyleSheet.create({
     marginHorizontal: Spacing.sm,
   },
   
-  // AI Insights Styles
   sectionHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.sm,
   },
-  toggleText: {
+  toggleButton: {
+    backgroundColor: Colors.primary[100],
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: BorderRadius.full,
+  },
+  toggleButtonText: {
     fontSize: Typography.sizes.sm,
-    color: Colors.primary[600],
+    color: Colors.primary[800],
     fontWeight: Typography.weights.medium,
   },
   insightsCard: {
@@ -2181,7 +1835,6 @@ const styles = StyleSheet.create({
     lineHeight: Typography.sizes.base * 1.4,
   },
 
-  // Weekly Trends Styles
   trendsContainer: {
     backgroundColor: 'white',
     borderRadius: BorderRadius.xl,
@@ -2219,7 +1872,6 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
 
-  // Loading styles
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',

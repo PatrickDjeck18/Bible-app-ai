@@ -9,12 +9,26 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.dailybread.dailyfaithbible"
     },
     "web": {
       "bundler": "metro",
       "output": "single",
       "favicon": "./assets/images/favicon.png"
+    },
+    "extra": {
+      "firebaseApiKey": "AIzaSyDbcPSejp8kJKEJBomRtAvPsWCAz9HSCCg",
+      "firebaseAuthDomain": "daily-bread-88f42.firebaseapp.com",
+      "firebaseProjectId": "daily-bread-88f42",
+      "firebaseStorageBucket": "daily-bread-88f42.firebasestorage.app",
+      "firebaseMessagingSenderId": "354959331079",
+      "firebaseAppId": "1:354959331079:android:7484ecb8076d9ee686ffa2",
+      "firebaseDatabaseUrl": "https://daily-bread-88f42.firebaseio.com",
+      "router": {},
+      "eas": {
+        "projectId": "5f2ce191-c79d-45c2-87ec-5fac7336cc30"
+      }
     },
     "plugins": [
       "expo-router",
@@ -25,7 +39,7 @@
       "typedRoutes": true
     },
     "android": {
-      "package": "com.anonymous.boltexponativewind"
+      "package": "com.dailybread.dailyfaithbible"
     }
   }
 }

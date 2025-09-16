@@ -1,3 +1,4 @@
+// AIBibleChatScreen.tsx
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
@@ -13,9 +14,14 @@ import {
   StatusBar,
   KeyboardAvoidingView,
   Platform,
+  Modal,
+  ActivityIndicator,
 } from 'react-native';
+import { useContext } from 'react';
+import Purchases from 'react-native-purchases'; // Import Purchases for subscription logic
+
 import { LinearGradient } from 'expo-linear-gradient';
-import { ArrowLeft, Send, Bot, Book, Heart, Cross, Users, Sparkles, CircleHelp as HelpCircle, MessageCircle, Star, Leaf, User, Info, Clock, ChevronRight } from 'lucide-react-native';
+import { ArrowLeft, Send, Bot, Book, Heart, Cross, Users, Sparkles, CircleHelp as HelpCircle, MessageCircle, Star, Leaf, User, Info, Clock, ChevronRight, Play, Star as PremiumStar, Zap } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { Colors } from '@/constants/DesignTokens';
 import { useAIBibleChat } from '@/hooks/useAIBibleChat';
@@ -34,10 +40,108 @@ interface RecentConversation {
   color: string;
 }
 
+// ⚠️ MOCK REWARDED AD SERVICE ⚠️
+// You must replace this with a real ad library like Google AdMob in a production app.
+const RewardedAdService = {
+  showAd: async (): Promise<boolean> => {
+    return new Promise((resolve) => {
+      console.log('🎬 Simulating rewarded ad...');
+      setTimeout(() => {
+        console.log('✅ Ad watched successfully.');
+        Alert.alert('Video Ad Watched!', 'You\'re one step closer to unlocking the chat.', [{ text: 'OK' }]);
+        resolve(true);
+      }, 3000); // Simulate a 3-second ad
+    });
+  }
+};
+
+// =================================================================================
+// Access Modal Component - The Paywall
+// =================================================================================
+const AccessModal = ({
+  visible,
+  onClose,
+  adsWatchedCount,
+  onWatchAd,
+  onUpgrade,
+  isAdLoading,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  adsWatchedCount: number;
+  onWatchAd: () => void;
+  onUpgrade: () => void;
+  isAdLoading: boolean;
+}) => (
+  <Modal
+    animationType="fade"
+    transparent={true}
+    visible={visible}
+    onRequestClose={onClose}
+  >
+    <View style={accessModalStyles.overlay}>
+      <View style={accessModalStyles.modalContainer}>
+        {/* CORRECTED: The content is now wrapped inside the LinearGradient container */}
+        <LinearGradient
+          colors={Colors.gradients.etherealSunset as any}
+          style={accessModalStyles.modalGradient}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+        >
+          <View style={accessModalStyles.modalHeader}>
+            <Zap size={36} color="white" style={{ marginBottom: 12 }} />
+            <Text style={accessModalStyles.modalTitle}>Unlock AI Bible Chat</Text>
+            <Text style={accessModalStyles.modalSubtitle}>
+              Watch a few short video ads or upgrade to an ad-free subscription for unlimited access.
+            </Text>
+          </View>
+          
+          <View style={accessModalStyles.counterContainer}>
+            <Text style={accessModalStyles.counterText}>
+              Ads Watched: <Text style={accessModalStyles.counterNumber}>{adsWatchedCount}</Text> / 2
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={accessModalStyles.watchAdButton}
+            onPress={onWatchAd}
+            disabled={isAdLoading}
+          >
+            {isAdLoading ? (
+              <ActivityIndicator color="white" />
+            ) : (
+              <View style={accessModalStyles.buttonContent}>
+                <Play size={20} color="white" />
+                <Text style={accessModalStyles.watchAdButtonText}>
+                  Watch Video Ad ({2 - adsWatchedCount} left)
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          <View style={accessModalStyles.divider} />
+
+          <TouchableOpacity
+            style={accessModalStyles.upgradeButton}
+            onPress={onUpgrade}
+          >
+            <View style={accessModalStyles.buttonContent}>
+              <PremiumStar size={20} color="#3B82F6" />
+              <Text style={accessModalStyles.upgradeButtonText}>Upgrade to Subscription</Text>
+            </View>
+          </TouchableOpacity>
+        </LinearGradient>
+      </View>
+    </View>
+  </Modal>
+);
+
 export default function AIBibleChatScreen() {
+
   const {
     messages,
     conversations,
+    loading,
     isTyping,
     currentCategory,
     currentConversationId,
@@ -52,7 +156,11 @@ export default function AIBibleChatScreen() {
   } = useAIBibleChat();
   
   const [inputText, setInputText] = useState('');
-  const [showCategories, setShowCategories] = useState(true);
+  
+  // State for ad-based access
+  const [adsWatchedCount, setAdsWatchedCount] = useState(0);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [isAdLoading, setIsAdLoading] = useState(false);
 
   // Animation values
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -60,27 +168,10 @@ export default function AIBibleChatScreen() {
   const scaleAnim = useRef(new Animated.Value(0.9)).current;
   const typingAnim = useRef(new Animated.Value(0)).current;
 
-  useEffect(() => {
-    // Entrance animations
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 800,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: 0,
-        duration: 600,
-        useNativeDriver: true,
-      }),
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        tension: 100,
-        friction: 8,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, []);
+  // Ref for the scroll view to auto-scroll to the bottom
+  const scrollViewRef = useRef<ScrollView>(null);
+  
+
 
   // Typing animation
   useEffect(() => {
@@ -103,6 +194,15 @@ export default function AIBibleChatScreen() {
       return () => animation.stop();
     }
   }, [isTyping]);
+
+  useEffect(() => {
+    // Auto-scroll to bottom when new messages arrive
+    if (scrollViewRef.current) {
+      setTimeout(() => {
+        scrollViewRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    }
+  }, [messages]);
 
   const categoryDisplayData = [
     {
@@ -203,14 +303,17 @@ export default function AIBibleChatScreen() {
     return categoryData?.color || '#6B7280';
   };
 
-  const handleCategorySelect = (categoryData: any) => {
-    const conversationId = startNewConversation(categoryData.id);
-    setShowCategories(false);
+  const handleCategorySelect = async (categoryData: any) => {
+    // Wait for the new conversation to be created and set
+    const conversationId = await startNewConversation(categoryData.id);
+    if (conversationId) {
+      // You may need to handle a specific state for showing chat vs categories
+      // but with the paywall logic, this handles it automatically
+    }
   };
 
   const handleSendMessage = async () => {
     if (!inputText.trim()) return;
-
     const messageText = inputText.trim();
     setInputText('');
     
@@ -220,191 +323,49 @@ export default function AIBibleChatScreen() {
   };
 
   const handleBackToCategories = () => {
-    setShowCategories(true);
+    // This now simply changes the state to show the categories again
+    // The paywall logic will take over if the user isn't subscribed
+    setShowPaywall(false);
     clearConversation();
   };
-
-
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  
+  const handleWatchAd = async () => {
+    if (adsWatchedCount < 2) {
+      setIsAdLoading(true);
+      const adSuccess = await RewardedAdService.showAd();
+      setIsAdLoading(false);
+      if (adSuccess) {
+        setAdsWatchedCount(prev => prev + 1);
+      }
+    }
   };
 
-  if (showCategories) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="light-content" />
-        <LinearGradient
-          colors={Colors.gradients.etherealSunset as any}
-          style={styles.gradient}
-        >
-          <Animated.ScrollView 
-            style={[styles.scrollView, { opacity: fadeAnim }]} 
-            showsVerticalScrollIndicator={false}
-          >
-            {/* Header */}
-            <Animated.View style={[styles.header, { transform: [{ translateY: slideAnim }] }]}>
-              <TouchableOpacity 
-                style={styles.backButton}
-                onPress={() => router.back()}
-              >
-                <ArrowLeft size={24} color="white" />
-              </TouchableOpacity>
-              <View style={styles.headerCenter}>
-                <Text style={styles.headerTitle}>AI Bible Chat</Text>
-                <Text style={styles.headerSubtitle}>Ask questions about faith, scripture, and spiritual growth</Text>
-              </View>
-              <TouchableOpacity style={styles.infoButton}>
-                <Info size={24} color="white" />
-              </TouchableOpacity>
-            </Animated.View>
+  const handleUpgradeSubscription = async () => {
+    try {
+      const offerings = await Purchases.getOfferings();
+      if (offerings.current) {
+        const packageToPurchase = offerings.current.monthly || offerings.current.weekly;
+        if (packageToPurchase) {
+          Alert.alert('Redirecting to Payment', 'Please complete your purchase to unlock the chat.', [{ text: 'OK' }]);
+          await Purchases.purchasePackage(packageToPurchase);
+        } else {
+          Alert.alert('Error', 'No subscription package found. Please try again later.');
+        }
+      } else {
+        Alert.alert('Error', 'Could not fetch subscription offerings.');
+      }
+    } catch (e: any) {
+      if (!e.userCancelled) {
+        Alert.alert('Purchase Failed', e.message || 'An error occurred during the purchase.');
+        console.error('❌ Purchase error:', e);
+      }
+    }
+  };
+  
+  // Conditionally render the paywall or the main screen content
 
-            {/* Main Chat Card */}
-            <Animated.View style={[styles.mainChatCard, { transform: [{ scale: scaleAnim }] }]}>
-              <LinearGradient
-                colors={['rgba(255, 255, 255, 0.95)', 'rgba(255, 255, 255, 0.9)']}
-                style={styles.mainChatGradient}
-              >
-                <View style={styles.aiAvatarContainer}>
-                  <LinearGradient
-                    colors={['#8B5CF6', '#7C3AED']}
-                    style={styles.aiAvatar}
-                  >
-                    <Bot size={32} color="white" />
-                  </LinearGradient>
-                  <View style={styles.onlineIndicator} />
-                </View>
-                
-                <Text style={styles.mainChatTitle}>Chat with AI Assistant</Text>
-                <Text style={styles.mainChatSubtitle}>
-                  Choose a topic below to start a meaningful conversation about faith, scripture, and spiritual growth.
-                </Text>
-              </LinearGradient>
-            </Animated.View>
 
-            {/* Categories Grid */}
-            <Animated.View style={[styles.categoriesSection, { transform: [{ scale: scaleAnim }] }]}>
-              <Text style={styles.sectionTitle}>AI Chat Categories</Text>
-              <View style={styles.categoriesGrid}>
-                {categoryDisplayData.map((category, index) => (
-                  <Animated.View
-                    key={category.id}
-                    style={[
-                      styles.categoryCardContainer,
-                      {
-                        opacity: fadeAnim,
-                        transform: [{
-                          translateY: slideAnim.interpolate({
-                            inputRange: [0, 50],
-                            outputRange: [0, 50 + (index * 10)],
-                          })
-                        }]
-                      }
-                    ]}
-                  >
-                    <TouchableOpacity
-                      style={styles.categoryCard}
-                      onPress={() => handleCategorySelect(category)}
-                    >
-                      <LinearGradient
-                        colors={['rgba(255, 255, 255, 0.95)', 'rgba(255, 255, 255, 0.9)']}
-                        style={styles.categoryGradient}
-                      >
-                        <View style={[styles.categoryIcon, { backgroundColor: category.color }]}>
-                          {category.icon}
-                        </View>
-                        <Text style={styles.categoryTitle}>{category.title}</Text>
-                        <Text style={styles.categorySubtitle}>{category.subtitle}</Text>
-                      </LinearGradient>
-                    </TouchableOpacity>
-                  </Animated.View>
-                ))}
-              </View>
-            </Animated.View>
-
-            {/* Recent Conversations */}
-            {recentConversations.length > 0 && (
-              <Animated.View style={[styles.recentSection, { transform: [{ scale: scaleAnim }] }]}>
-                <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Recent Conversations</Text>
-                </View>
-                
-                <View style={styles.recentList}>
-                  {recentConversations.map((conversation) => (
-                    <TouchableOpacity
-                      key={conversation.id}
-                      style={styles.recentItem}
-                      onPress={() => openExistingConversation(conversation.id)}
-                      onLongPress={() => {
-                        Alert.alert(
-                          'Delete Conversation',
-                          'Are you sure you want to delete this conversation?',
-                          [
-                            { text: 'Cancel', style: 'cancel' },
-                            { 
-                              text: 'Delete', 
-                              style: 'destructive',
-                              onPress: () => deleteConversation(conversation.id)
-                            }
-                          ]
-                        );
-                      }}
-                    >
-                      <LinearGradient
-                        colors={['rgba(255, 255, 255, 0.95)', 'rgba(255, 255, 255, 0.9)']}
-                        style={styles.recentGradient}
-                      >
-                        <View style={styles.recentLeft}>
-                          <View style={[styles.recentIcon, { backgroundColor: getCategoryColor(conversation.category) }]}>
-                            {getCategoryIcon(conversation.category)}
-                          </View>
-                          <View style={styles.recentContent}>
-                            <Text style={styles.recentCategory}>
-                              {chatCategories.find(c => c.id === conversation.category)?.title || conversation.category}
-                            </Text>
-                            <Text style={styles.recentTitle} numberOfLines={1}>
-                              {conversation.title}
-                            </Text>
-                            <Text style={styles.recentPreview} numberOfLines={1}>
-                              {conversation.preview}
-                            </Text>
-                          </View>
-                        </View>
-                        <View style={styles.recentRight}>
-                          <Text style={styles.recentTime}>{formatTimeAgo(conversation.lastMessageTime)}</Text>
-                          <ChevronRight size={16} color="#9CA3AF" />
-                        </View>
-                      </LinearGradient>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </Animated.View>
-            )}
-
-            {/* Empty State for Recent Conversations */}
-            {recentConversations.length === 0 && (
-              <Animated.View style={[styles.emptyRecentSection, { transform: [{ scale: scaleAnim }] }]}>
-                <LinearGradient
-                  colors={['rgba(255, 255, 255, 0.95)', 'rgba(255, 255, 255, 0.9)']}
-                  style={styles.emptyRecentGradient}
-                >
-                  <MessageCircle size={48} color="#9CA3AF" />
-                  <Text style={styles.emptyRecentTitle}>No Recent Conversations</Text>
-                  <Text style={styles.emptyRecentSubtitle}>
-                    Start a conversation by selecting a category above
-                          </Text>
-                </LinearGradient>
-              </Animated.View>
-            )}
-
-            {/* Bottom spacing */}
-            <View style={styles.bottomSpacing} />
-          </Animated.ScrollView>
-        </LinearGradient>
-      </SafeAreaView>
-    );
-  }
-
-  // Chat Interface
+  // Main UI
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -420,7 +381,7 @@ export default function AIBibleChatScreen() {
           <Animated.View style={[styles.chatHeader, { opacity: fadeAnim }]}>
             <TouchableOpacity
               style={styles.chatBackButton}
-              onPress={() => router.back()}
+              onPress={handleBackToCategories}
             >
               <ArrowLeft size={24} color="white" />
             </TouchableOpacity>
@@ -444,16 +405,7 @@ export default function AIBibleChatScreen() {
           <Animated.ScrollView 
             style={[styles.messagesContainer, { opacity: fadeAnim }]}
             showsVerticalScrollIndicator={false}
-            ref={(ref) => {
-              // Auto-scroll to bottom when new messages arrive
-              if (ref && messages.length > 0) {
-                setTimeout(() => {
-                  if ('scrollToEnd' in ref) {
-                    ref.scrollToEnd({ animated: true });
-                  }
-                }, 100);
-              }
-            }}
+            ref={scrollViewRef}
           >
             {messages.map((message) => (
               <ChatMessageComponent
@@ -793,6 +745,18 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
   },
+  
+  // Loading State
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: 'white',
+  },
 
   // Chat Interface Styles
   chatContainer: {
@@ -948,5 +912,100 @@ const styles = StyleSheet.create({
 
   bottomSpacing: {
     height: 40,
+  },
+});
+
+const accessModalStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    width: '90%',
+    maxWidth: 400,
+    borderRadius: 24,
+    overflow: 'hidden',
+    elevation: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+  },
+  modalGradient: {
+    padding: 32,
+    alignItems: 'center',
+  },
+  modalHeader: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  modalTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: 'white',
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.9)',
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 20,
+  },
+  counterContainer: {
+    marginBottom: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 12,
+  },
+  counterText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: 'white',
+  },
+  counterNumber: {
+    fontWeight: '800',
+  },
+  watchAdButton: {
+    width: '100%',
+    paddingVertical: 16,
+    borderRadius: 16,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  watchAdButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '700',
+    marginLeft: 8,
+  },
+  divider: {
+    width: '80%',
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    marginBottom: 20,
+  },
+  upgradeButton: {
+    width: '100%',
+    paddingVertical: 16,
+    borderRadius: 16,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  upgradeButtonText: {
+    color: '#3B82F6',
+    fontSize: 16,
+    fontWeight: '700',
+    marginLeft: 8,
+  },
+  buttonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
 });

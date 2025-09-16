@@ -1,38 +1,37 @@
-import firebase from 'firebase/compat/app';
-import 'firebase/compat/auth';
-import 'firebase/compat/firestore';
-import { getAuth, initializeAuth, getReactNativePersistence } from 'firebase/auth';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+// src/lib/firebaseConfig.js
 
-// Your web app's Firebase configuration.
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getFirestore } from 'firebase/firestore';
+import { getAuth, initializeAuth } from 'firebase/auth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
+import Constants from 'expo-constants';
+
+// Use optional chaining to safely access the config and extra properties.
 const firebaseConfig = {
-  apiKey: "AIzaSyAVNWytRAmf_qz-bUI2s7IJo85-NtVaC7s",
+  apiKey: 'AIzaSyDbcPSejp8kJKEJBomRtAvPsWCAz9HSCCg',
   authDomain: "daily-bread-88f42.firebaseapp.com",
-  projectId: "daily-bread-88f42",
-  storageBucket: "daily-bread-88f42.firebasestorage.app",
+  projectId:"daily-bread-88f42",
+  storageBucket:  "daily-bread-88f42.firebasestorage.app",
   messagingSenderId: "354959331079",
-  appId: "1:354959331079:web:0cdd37c2387fc1b386ffa2",
-  measurementId: "G-53DHZ8FNP0",
-  databaseURL: "https://daily-bread-88f42.firebaseio.com",
+  appId: "1:354959331079:android:7484ecb8076d9ee686ffa2",
+  databaseURL:"https://daily-bread-88f42.firebaseio.com"
 };
 
 // Initialize Firebase
-if (!firebase.apps.length) {
-  firebase.initializeApp(firebaseConfig);
-}
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
-const app = firebase.app();
-const auth = getAuth(app);
-const db = firebase.firestore();
+// Initialize Firebase services
+const auth = Platform.OS === 'web'
+  ? getAuth(app)
+  : initializeAuth(app);
 
-// Initialize Google Auth Provider
-const googleProvider = new firebase.auth.GoogleAuthProvider();
-googleProvider.addScope('email');
-googleProvider.addScope('profile');
+const db = getFirestore(app);
 
 // Add auth state change listener for debugging
 auth.onAuthStateChanged((user) => {
   console.log('🔴 Firebase auth state changed:', user ? 'User signed in' : 'User signed out');
 });
 
-export { app, auth, db, googleProvider, firebaseConfig };
+// Export services for use throughout your app
+export { app, auth, db, firebaseConfig };

@@ -13,19 +13,24 @@ const STORAGE_KEYS = {
 // Local storage helper functions using AsyncStorage
 const getFromStorage = async (key: string) => {
   try {
+    console.log(`📖 Reading from storage ${key}`);
     const item = await AsyncStorage.getItem(key);
-    return item ? JSON.parse(item) : null;
+    const result = item ? JSON.parse(item) : null;
+    console.log(`📖 Retrieved from storage ${key}:`, result ? result.length + ' items' : 'null');
+    return result;
   } catch (error) {
-    console.error('Error reading from storage:', error);
+    console.error('❌ Error reading from storage:', error);
     return null;
   }
 };
 
 const setToStorage = async (key: string, value: any) => {
   try {
+    console.log(`💾 Writing to storage ${key}:`, value.length || 'data');
     await AsyncStorage.setItem(key, JSON.stringify(value));
+    console.log(`✅ Successfully wrote to storage ${key}`);
   } catch (error) {
-    console.error('Error writing to storage:', error);
+    console.error('❌ Error writing to storage:', error);
   }
 };
 
@@ -169,7 +174,6 @@ export function useBibleAPI() {
       const storedProgress = await getFromStorage(STORAGE_KEYS.READING_PROGRESS);
       const storedCache = await getFromStorage(STORAGE_KEYS.CACHED_PASSAGES);
       const storedRecent = await getFromStorage(STORAGE_KEYS.RECENT_CHAPTERS);
-      
       if (storedBookmarks) setBookmarks(storedBookmarks);
       if (storedProgress) setReadingProgress(storedProgress);
       if (storedCache) setCachedPassages(storedCache);
@@ -195,6 +199,7 @@ export function useBibleAPI() {
   useEffect(() => {
     setToStorage(STORAGE_KEYS.RECENT_CHAPTERS, recentChapters);
   }, [recentChapters]);
+
 
   // Clean up old cache periodically
   useEffect(() => {
@@ -778,6 +783,7 @@ export function useBibleAPI() {
       addBookmark(reference, content, bibleId);
     }
   };
+
 
   // Get reading progress for a specific book
   const getReadingProgress = (bookId: string) => {

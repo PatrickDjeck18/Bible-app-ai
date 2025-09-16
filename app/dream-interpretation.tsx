@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
@@ -13,11 +14,10 @@ import {
   Platform,
   StyleSheet,
   ActivityIndicator,
-  StatusBar as RNStatusBar,
   Pressable,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { StatusBar } from 'expo-status-bar';
+import { StatusBar as RNStatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import {
   ChevronLeft,
@@ -26,77 +26,147 @@ import {
   Moon,
   BookOpen,
   Star,
-  ArrowLeft,
   Calendar,
   Clock,
-  Zap
+  Zap,
+  Play,
+  Star as PremiumStar,
 } from 'lucide-react-native';
 import { DreamService } from '../lib/services/dreamService';
 import { DreamEntry } from '../lib/types/dreams';
 import { Colors, Typography, Spacing, BorderRadius, Shadows } from '../constants/DesignTokens';
 import { useAuth } from '../hooks/useAuth';
 import BackgroundGradient from '@/components/BackgroundGradient';
+import { HeaderCard } from '@/components/HeaderCard';
+import { useSubscription } from '@/hooks/subsHook'; // Import subscription hook
+import Purchases from 'react-native-purchases'; // Import RevenueCat
 
 const { width: screenWidth } = Dimensions.get('window');
 
+type MoodOption = 'peaceful' | 'anxious' | 'joyful' | 'confused' | 'hopeful';
 
+// ⚠️ MOCK REWARDED AD SERVICE ⚠️
+// Replace this with a real ad library like Google AdMob in a production app.
+const RewardedAdService = {
+  showAd: async (): Promise<boolean> => {
+    return new Promise((resolve) => {
+      console.log('🎬 Simulating rewarded ad...');
+      setTimeout(() => {
+        console.log('✅ Ad watched successfully.');
+        Alert.alert('Video Ad Watched!', 'You\'re one step closer to unlocking the analysis.', [{ text: 'OK' }]);
+        resolve(true);
+      }, 3000); // Simulate a 3-second ad
+    });
+  }
+};
+
+// =================================================================================
+// Access Modal Component - The Paywall
+// =================================================================================
+const AccessModal = ({
+  visible,
+  onClose,
+  adsWatchedCount,
+  onWatchAd,
+  onUpgrade,
+  isAdLoading,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  adsWatchedCount: number;
+  onWatchAd: () => void;
+  onUpgrade: () => void;
+  isAdLoading: boolean;
+}) => (
+  <Modal
+    animationType="fade"
+    transparent={true}
+    visible={visible}
+    onRequestClose={onClose}
+  >
+    <View style={accessModalStyles.overlay}>
+      <View style={accessModalStyles.modalContainer}>
+        <LinearGradient
+          colors={Colors.gradients.etherealSunset as any}
+          style={accessModalStyles.modalGradient}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+        >
+          <View style={accessModalStyles.modalHeader}>
+            <Zap size={36} color="white" style={{ marginBottom: 12 }} />
+            <Text style={accessModalStyles.modalTitle}>Unlock AI Dream Analysis</Text>
+            <Text style={accessModalStyles.modalSubtitle}>
+              Watch a few short video ads or upgrade to an ad-free subscription for unlimited access.
+            </Text>
+          </View>
+          
+          <View style={accessModalStyles.counterContainer}>
+            <Text style={accessModalStyles.counterText}>
+              Ads Watched: <Text style={accessModalStyles.counterNumber}>{adsWatchedCount}</Text> / 2
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={accessModalStyles.watchAdButton}
+            onPress={onWatchAd}
+            disabled={isAdLoading || adsWatchedCount >= 2}
+          >
+            {isAdLoading ? (
+              <ActivityIndicator color="white" />
+            ) : (
+              <View style={accessModalStyles.buttonContent}>
+                <Play size={20} color="white" />
+                <Text style={accessModalStyles.watchAdButtonText}>
+                  Watch Video Ad ({2 - adsWatchedCount} left)
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          <View style={accessModalStyles.divider} />
+
+          <TouchableOpacity
+            style={accessModalStyles.upgradeButton}
+            onPress={onUpgrade}
+          >
+            <View style={accessModalStyles.buttonContent}>
+              <PremiumStar size={20} color="#3B82F6" />
+              <Text style={accessModalStyles.upgradeButtonText}>Upgrade to Subscription</Text>
+            </View>
+          </TouchableOpacity>
+        </LinearGradient>
+      </View>
+    </View>
+  </Modal>
+);
 
 export default function DreamInterpretationScreen() {
   const { user } = useAuth();
+  const { isSubscribed } = useSubscription(); // Use the real subscription status
+
+  // State for dreams and selected dream
   const [dreams, setDreams] = useState<DreamEntry[]>([]);
   const [selectedDream, setSelectedDream] = useState<DreamEntry | null>(null);
 
   // Dream form state
   const [dreamTitle, setDreamTitle] = useState('');
   const [dreamDescription, setDreamDescription] = useState('');
-  const [dreamMood, setDreamMood] = useState<'peaceful' | 'anxious' | 'joyful' | 'confused' | 'hopeful'>('peaceful');
+  const [dreamMood, setDreamMood] = useState<MoodOption>('peaceful');
+
+  // Loading and analysis state
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [loadingDreams, setLoadingDreams] = useState(true);
+
+  // State for ad-based access
+  const [adsWatchedCount, setAdsWatchedCount] = useState(0);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [isAdLoading, setIsAdLoading] = useState(false);
 
   // Animation values
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(50)).current;
   const scaleAnim = useRef(new Animated.Value(0.9)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    // Enhanced entrance animations
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 1000,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: 0,
-        duration: 800,
-        useNativeDriver: true,
-      }),
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        tension: 120,
-        friction: 8,
-        useNativeDriver: true,
-      }),
-    ]).start();
-
-    // Enhanced pulse animation for active elements
-    const pulseAnimation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1.03,
-          duration: 2500,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
-          toValue: 1,
-          duration: 2500,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    pulseAnimation.start();
-
-    return () => pulseAnimation.stop();
-  }, []);
 
   const moods = [
     { id: 'peaceful', label: 'Peaceful', emoji: '😌', color: '#10B981', gradient: ['#10B981', '#34D399'] },
@@ -106,39 +176,38 @@ export default function DreamInterpretationScreen() {
     { id: 'hopeful', label: 'Hopeful', emoji: '🙏', color: '#8B5CF6', gradient: ['#8B5CF6', '#A855F7'] },
   ];
 
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [loadingDreams, setLoadingDreams] = useState(true);
-  const [loadingTimeout, setLoadingTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
-
+  // Run initial entrance and pulse animations
   useEffect(() => {
-    if (user?.id) {
-      loadDreams();
-    } else {
-      setLoadingDreams(false);
-    }
-  }, [user]);
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 1000, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 800, useNativeDriver: true }),
+      Animated.spring(scaleAnim, { toValue: 1, tension: 120, friction: 8, useNativeDriver: true }),
+    ]).start();
 
-  const loadDreams = async (forceRefresh: boolean = false) => {
+    const pulseAnimation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.03, duration: 2500, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 2500, useNativeDriver: true }),
+      ])
+    );
+    pulseAnimation.start();
+
+    return () => pulseAnimation.stop();
+  }, [fadeAnim, slideAnim, scaleAnim, pulseAnim]);
+
+  // Use useCallback to memoize functions and prevent unnecessary re-renders
+  const loadDreams = useCallback(async (forceRefresh: boolean = false) => {
     try {
       setLoadingDreams(true);
-      
-      // Set a timeout to show a message if loading takes too long
-      const timeout = setTimeout(() => {
-        console.log('⚠️ Dream loading is taking longer than expected...');
-      }, 5000);
-      setLoadingTimeout(timeout);
-      
-      if (!user?.id) {
+      if (!user?.uid) {
         console.log('No authenticated user, skipping dreams load');
         setDreams([]);
         return;
       }
-      
-      const dreamsList = await DreamService.getDreams(user.id, forceRefresh);
+      const dreamsList = await DreamService.getDreams(user.uid, forceRefresh);
       setDreams(dreamsList);
     } catch (error) {
       console.error('Error loading dreams:', error);
-      // Show user-friendly error message
       Alert.alert(
         'Loading Error',
         'Unable to load your dreams. Please check your internet connection and try again.',
@@ -146,57 +215,96 @@ export default function DreamInterpretationScreen() {
       );
     } finally {
       setLoadingDreams(false);
-      if (loadingTimeout) {
-        clearTimeout(loadingTimeout);
-        setLoadingTimeout(null);
+    }
+  }, [user]);
+
+  // Load dreams on initial mount and check access
+  useEffect(() => {
+    if (user?.uid) {
+      loadDreams();
+    } else {
+      setLoadingDreams(false);
+    }
+
+    if (!isSubscribed) {
+      if (adsWatchedCount < 2) {
+        setShowPaywall(true);
+      } else {
+        setShowPaywall(false);
+      }
+    } else {
+      setShowPaywall(false);
+    }
+
+  }, [user, loadDreams, isSubscribed, adsWatchedCount]);
+
+  const handleWatchAd = async () => {
+    if (adsWatchedCount < 2) {
+      setIsAdLoading(true);
+      const adSuccess = await RewardedAdService.showAd();
+      setIsAdLoading(false);
+      if (adSuccess) {
+        setAdsWatchedCount(prev => prev + 1);
       }
     }
   };
 
-  const handleRefreshDreams = () => {
-    loadDreams(true); // Force refresh from database
+  const handleUpgradeSubscription = async () => {
+    try {
+      const offerings = await Purchases.getOfferings();
+      if (offerings.current) {
+        const packageToPurchase = offerings.current.monthly || offerings.current.weekly;
+        if (packageToPurchase) {
+          Alert.alert('Redirecting to Payment', 'Please complete your purchase to unlock dream analysis.', [{ text: 'OK' }]);
+          await Purchases.purchasePackage(packageToPurchase);
+        } else {
+          Alert.alert('Error', 'No subscription package found. Please try again later.');
+        }
+      } else {
+        Alert.alert('Error', 'Could not fetch subscription offerings.');
+      }
+    } catch (e: any) {
+      if (!e.userCancelled) {
+        Alert.alert('Purchase Failed', e.message || 'An error occurred during the purchase.');
+        console.error('❌ Purchase error:', e);
+      }
+    }
   };
 
-  const handleAddDream = async () => {
+  const handleAddDream = useCallback(async () => {
     if (!dreamTitle.trim() || !dreamDescription.trim()) {
       Alert.alert('Missing Information', 'Please fill in both title and description.');
       return;
     }
 
-    if (!user?.id) {
+    if (!user?.uid) {
       Alert.alert('Authentication Error', 'Please log in to add dreams.');
       return;
     }
 
-    // Start analysis with better user feedback
+    // Check for subscription before allowing AI analysis
+    if (!isSubscribed && adsWatchedCount < 2) {
+      setShowPaywall(true);
+      return;
+    }
+
     setIsAnalyzing(true);
-    
-    // Show immediate feedback to user
     Alert.alert(
       'Analyzing Dream...',
       'Your dream is being analyzed with AI. This may take a few moments.',
       [{ text: 'OK' }]
     );
-    
+
     try {
-      console.log('🚀 Adding and analyzing dream:', dreamTitle);
-      
-      // Call the service to add and interpret the dream
       const analyzedDream = await DreamService.addAndInterpretDream({
         dreamTitle: dreamTitle.trim(),
         dreamDescription: dreamDescription.trim(),
         mood: dreamMood
-      }, user.id);
+      }, user.uid);
 
-      console.log('✅ Dream added and analyzed:', analyzedDream);
-      
-      // Add to local state
       setDreams(prev => [analyzedDream, ...prev]);
-      
-      // Reset form
       resetForm();
-      
-      // Show success message and offer to view results
+
       Alert.alert(
         'Dream Analyzed! ✨',
         'Your dream has been analyzed with biblical insights and spiritual guidance.',
@@ -205,26 +313,25 @@ export default function DreamInterpretationScreen() {
           { text: 'View Analysis', onPress: () => setSelectedDream(analyzedDream) }
         ]
       );
-      
     } catch (error) {
       console.error('❌ Error adding dream:', error);
       Alert.alert(
         'Analysis Error',
-        'Failed to analyze your dream. The dream was saved but analysis failed. Please try again later.',
+        'Failed to analyze your dream. Please try again later.',
         [{ text: 'OK' }]
       );
     } finally {
       setIsAnalyzing(false);
     }
-  };
+  }, [dreamTitle, dreamDescription, dreamMood, user, isSubscribed, adsWatchedCount]);
 
-  const handleDeleteDream = async (dreamId: string) => {
+  const handleDeleteDream = useCallback(async (dreamId: string) => {
     try {
-      if (!user?.id) {
+      if (!user?.uid) {
         Alert.alert('Authentication Error', 'Please log in to delete dreams.');
         return;
       }
-      await DreamService.deleteDream(dreamId, user.id);
+      await DreamService.deleteDream(dreamId, user.uid);
       setDreams(prev => prev.filter(d => d.id !== dreamId));
       setSelectedDream(null);
       Alert.alert('Success', 'Dream deleted successfully.');
@@ -232,14 +339,13 @@ export default function DreamInterpretationScreen() {
       console.error('Error deleting dream:', error);
       Alert.alert('Error', 'Failed to delete dream.');
     }
-  };
+  }, [user]);
 
   const resetForm = () => {
     setDreamTitle('');
     setDreamDescription('');
     setDreamMood('peaceful');
   };
-
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -538,199 +644,40 @@ export default function DreamInterpretationScreen() {
     </Modal>
   );
 
-  // const NewDreamModal = () => ( // This component is removed
-  //   <Modal
-  //     visible={showNewDreamModal}
-  //     animationType="slide"
-  //     presentationStyle="pageSheet"
-  //     onRequestClose={handleModalClose}
-  //     transparent={false}
-  //     statusBarTranslucent={true}
-  //   >
-  //     <KeyboardAvoidingView
-  //       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-  //       style={styles.modalContainer}
-  //       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
-  //     >
-  //       <LinearGradient
-  //         colors={Colors.gradients.etherealSunset as any}
-  //         style={styles.modalGradient}
-  //         start={{ x: 0, y: 0 }}
-  //         end={{ x: 1, y: 1 }}
-  //       >
-  //         <View style={styles.modalHeader}>
-  //           <TouchableOpacity onPress={handleModalClose}>
-  //             <ChevronLeft size={24} color="white" />
-  //           </TouchableOpacity>
-  //           <Text style={styles.modalTitle}>Record New Dream</Text>
-  //           <View style={{ width: 24 }} />
-  //         </View>
-          
-  //         <ScrollView 
-  //           style={styles.modalContent}
-  //           showsVerticalScrollIndicator={false}
-  //           keyboardShouldPersistTaps="handled"
-  //           nestedScrollEnabled={true}
-  //           bounces={false}
-  //         >
-  //           <View style={styles.dreamForm}>
-  //             <View style={styles.inputGroup}>
-  //               <Text style={styles.inputLabel}>Dream Title *</Text>
-  //               <TextInput
-  //                 style={[styles.input, dreamTitle.length > 0 && styles.inputFocused]}
-  //                 placeholder="Give your dream a memorable title..."
-  //                 placeholderTextColor="rgba(255, 255, 255, 0.6)"
-  //                 value={dreamTitle}
-  //                 onChangeText={setDreamTitle}
-  //                 maxLength={100}
-  //                 autoCorrect={false}
-  //                 autoCapitalize="words"
-  //                 blurOnSubmit={true}
-  //                 textContentType="none"
-  //               />
-  //               <Text style={styles.charCount}>{dreamTitle.length}/100</Text>
-  //             </View>
-
-  //             <View style={styles.inputGroup}>
-  //               <Text style={styles.inputLabel}>Dream Description *</Text>
-  //               <TextInput
-  //                 style={[styles.input, styles.textArea, dreamDescription.length > 0 && styles.inputFocused]}
-  //                 placeholder="Describe your dream in detail. Include people, places, emotions, and any significant events..."
-  //                 placeholderTextColor="rgba(255, 255, 255, 0.6)"
-  //                 value={dreamDescription}
-  //                 onChangeText={setDreamDescription}
-  //                 multiline
-  //                 numberOfLines={6}
-  //                 textAlignVertical="top"
-  //                 maxLength={1000}
-  //                 autoCorrect={false}
-  //                 autoCapitalize="sentences"
-  //                 blurOnSubmit={true}
-  //                 textContentType="none"
-  //                 scrollEnabled={true}
-  //               />
-  //               <Text style={styles.charCount}>{dreamDescription.length}/1000</Text>
-  //             </View>
-
-  //             <View style={styles.inputGroup}>
-  //               <Text style={styles.inputLabel}>Dream Mood</Text>
-  //               <View style={styles.moodSelector}>
-  //                 {moods.map((mood) => (
-  //                   <TouchableOpacity
-  //                     key={mood.id}
-  //                     style={[
-  //                       styles.moodOption,
-  //                       dreamMood === mood.id && [styles.selectedMoodOption, { backgroundColor: mood.color }]
-  //                     ]}
-  //                     onPress={() => setDreamMood(mood.id as any)}
-  //                   >
-  //                     <Text style={styles.moodOptionEmoji}>{mood.emoji}</Text>
-  //                     <Text style={[
-  //                       styles.moodOptionText,
-  //                       dreamMood === mood.id && styles.selectedMoodOptionText
-  //                     ]}>
-  //                       {mood.label}
-  //                     </Text>
-  //                   </TouchableOpacity>
-  //                 ))}
-  //               </View>
-  //             </View>
-
-  //             {isAnalyzing && (
-  //               <View style={styles.analyzingProgress}>
-  //                 <LinearGradient
-  //                   colors={['rgba(255, 255, 255, 0.2)', 'rgba(255, 255, 255, 0.1)']}
-  //                   style={styles.analyzingProgressCard}
-  //                 >
-  //                   <Animated.View style={[styles.analyzingIcon, { transform: [{ scale: pulseAnim }] }]}>
-  //                     <Sparkles size={24} color="white" />
-  //                   </Animated.View>
-  //                   <Text style={styles.analyzingTitle}>Analyzing Your Dream</Text>
-  //                   <Text style={styles.analyzingSubtitle}>
-  //                     Our AI is examining biblical symbols and spiritual meanings...
-  //                   </Text>
-  //                   <ActivityIndicator size="small" color="white" style={{ marginTop: 16 }} />
-  //                 </LinearGradient>
-  //               </View>
-  //             )}
-
-  //             <TouchableOpacity 
-  //               style={[
-  //                 styles.saveButton,
-  //                 (!dreamTitle.trim() || !dreamDescription.trim()) && styles.saveButtonDisabled,
-  //                 isAnalyzing && styles.saveButtonAnalyzing,
-  //                 (!dreamTitle.trim() || !dreamDescription.trim()) ? null : styles.saveButtonGlow
-  //               ]} 
-  //               onPress={handleAddDream}
-  //               disabled={!dreamTitle.trim() || !dreamDescription.trim() || isAnalyzing}
-  //             >
-  //               <LinearGradient
-  //                 colors={isAnalyzing 
-  //                   ? ['#F59E0B', '#D97706'] 
-  //                   : (!dreamTitle.trim() || !dreamDescription.trim()) 
-  //                     ? ['rgba(255, 255, 255, 0.1)', 'rgba(255, 255, 255, 0.05)']
-  //                     : ['#667eea', '#764ba2']
-  //               }
-  //               start={{ x: 0, y: 0 }}
-  //               end={{ x: 1, y: 1 }}
-  //               style={styles.saveButtonGradient}
-  //             >
-  //               <View style={styles.saveButtonContent}>
-  //                 {isAnalyzing ? (
-  //                   <ActivityIndicator size="small" color="white" />
-  //                 ) : (
-  //                   <Sparkles size={20} color={(!dreamTitle.trim() || !dreamDescription.trim()) ? 'rgba(255, 255, 255, 0.5)' : 'white'} />
-  //                 )}
-  //                 <Text style={[
-  //                   styles.saveButtonText,
-  //                   (!dreamTitle.trim() || !dreamDescription.trim()) && styles.saveButtonTextDisabled
-  //                 ]}>
-  //                   {isAnalyzing ? 'AI Analysis in Progress...' : 
-  //                     (!dreamTitle.trim() || !dreamDescription.trim()) ? 'Fill Required Fields' : 'Analyze with AI'
-  //                   }
-  //                 </Text>
-  //               </View>
-  //             </LinearGradient>
-  //           </View>
-  //         </ScrollView>
-  //       </LinearGradient>
-  //     </KeyboardAvoidingView>
-  //   </Modal>
-  // );
+  if (!isSubscribed && adsWatchedCount < 2) {
+    return (
+      <AccessModal
+        visible={showPaywall}
+        onClose={() => {}}
+        adsWatchedCount={adsWatchedCount}
+        onWatchAd={handleWatchAd}
+        onUpgrade={handleUpgradeSubscription}
+        isAdLoading={isAdLoading}
+      />
+    );
+  }
 
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <StatusBar style="dark" />
+      <RNStatusBar style="dark" />
       <BackgroundGradient>
-        <Animated.ScrollView 
-          style={[styles.scrollView, { opacity: fadeAnim }]} 
+        {/* Fixed Hero Header */}
+        <HeaderCard
+          title="Dream Interpretation"
+          subtitle={`${dreams.length} dreams recorded • AI-powered insights`}
+          showBackButton={true}
+          onBackPress={() => router.back()}
+          gradientColors={Colors.gradients.spiritualLight}
+        />
+        
+        <Animated.ScrollView
+          style={[styles.scrollView, { opacity: fadeAnim }]}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
-          {/* Hero Header */}
-          <View style={styles.hero}>
-            <View style={styles.heroGradient}>
-              <View style={styles.heroContent}>
-                <TouchableOpacity 
-                  style={styles.heroActionButton}
-                  onPress={() => router.back()}
-                >
-                  <ArrowLeft size={20} color={Colors.primary[600]} />
-                </TouchableOpacity>
-                <View style={styles.heroTextBlock}>
-                  <Text style={styles.heroTitle}>Dream Interpretation</Text>
-                  <Text style={styles.heroSubtitle}>
-                    {dreams.length} dreams recorded • AI-powered insights
-                  </Text>
-                </View>
-                <View style={styles.heroSpacer} />
-              </View>
-            </View>
-          </View>
-
           {/* Overview Card */}
           <Animated.View style={[styles.overviewCard, { transform: [{ scale: scaleAnim }] }]}>
             <View style={styles.overviewGradient}>
@@ -752,7 +699,6 @@ export default function DreamInterpretationScreen() {
                   <Text style={styles.activeText}>Active</Text>
                 </Animated.View>
               </View>
-              
               <View style={styles.statsContainer}>
                 <View style={styles.statItem}>
                   <Text style={styles.statNumber}>{dreams.length}</Text>
@@ -769,7 +715,7 @@ export default function DreamInterpretationScreen() {
               </View>
             </View>
           </Animated.View>
-
+          
           {/* Record New Dream Form */}
           <Animated.View style={[styles.dreamFormCard, { transform: [{ scale: scaleAnim }] }]}>
             <View style={styles.dreamFormGradient}>
@@ -791,11 +737,10 @@ export default function DreamInterpretationScreen() {
                     autoCorrect={false}
                     autoCapitalize="words"
                     blurOnSubmit={true}
-                    textContentType="none"
                   />
-                  <Text style={styles.charCount}>0/100</Text>
+                  <Text style={styles.charCount}>{dreamTitle.length}/100</Text>
                 </View>
-
+                
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Dream Description *</Text>
                   <TextInput
@@ -811,12 +756,11 @@ export default function DreamInterpretationScreen() {
                     autoCorrect={false}
                     autoCapitalize="sentences"
                     blurOnSubmit={true}
-                    textContentType="none"
                     scrollEnabled={true}
                   />
-                  <Text style={styles.charCount}>0/1000</Text>
+                  <Text style={styles.charCount}>{dreamDescription.length}/1000</Text>
                 </View>
-
+                
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Dream Mood</Text>
                   <View style={styles.moodSelector}>
@@ -825,9 +769,9 @@ export default function DreamInterpretationScreen() {
                         key={mood.id}
                         style={[
                           styles.moodOption,
-                          dreamMood === mood.id && [styles.selectedMoodOption, { backgroundColor: mood.color }]
+                          dreamMood === mood.id && [styles.selectedMoodOption, { backgroundColor: mood.color }],
                         ]}
-                        onPress={() => setDreamMood(mood.id as any)}
+                        onPress={() => setDreamMood(mood.id as MoodOption)}
                       >
                         <Text style={styles.moodOptionEmoji}>{mood.emoji}</Text>
                         <Text style={[
@@ -864,148 +808,17 @@ export default function DreamInterpretationScreen() {
                     styles.saveButton,
                     (!dreamTitle.trim() || !dreamDescription.trim()) && styles.saveButtonDisabled,
                     isAnalyzing && styles.saveButtonAnalyzing,
-                    (!dreamTitle.trim() || !dreamDescription.trim()) ? null : styles.saveButtonGlow
+                    (!dreamTitle.trim() || !dreamDescription.trim() || (!isSubscribed && adsWatchedCount < 2)) ? null : styles.saveButtonGlow
                   ]} 
                   onPress={handleAddDream}
-                  disabled={!dreamTitle.trim() || !dreamDescription.trim() || isAnalyzing}
+                  disabled={isAnalyzing || (!dreamTitle.trim() || !dreamDescription.trim())}
                 >
                   <LinearGradient
                     colors={isAnalyzing 
                       ? ['#F59E0B', '#D97706'] 
-                      : (!dreamTitle.trim() || !dreamDescription.trim()) 
+                      : (!dreamTitle.trim() || !dreamDescription.trim() || (!isSubscribed && adsWatchedCount < 2)) 
                         ? ['rgba(255, 255, 255, 0.1)', 'rgba(255, 255, 255, 0.05)']
                         : ['#667eea', '#764ba2']
-                  }
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.saveButtonGradient}
-                  >
-                    <View style={styles.saveButtonContent}>
-                      {isAnalyzing ? (
-                        <ActivityIndicator size="small" color="white" />
-                      ) : (
-                        <Sparkles size={20} color={(!dreamTitle.trim() || !dreamDescription.trim()) ? 'rgba(255, 255, 255, 0.5)' : 'white'} />
-                      )}
-                      <Text style={[
-                        styles.saveButtonText,
-                        (!dreamTitle.trim() || !dreamDescription.trim()) && styles.saveButtonTextDisabled
-                      ]}>
-                        {isAnalyzing ? 'AI Analysis in Progress...' : 
-                          (!dreamTitle.trim() || !dreamDescription.trim()) ? 'Fill Required Fields' : 'Analyze with AI'
-                        }
-                      </Text>
-                    </View>
-                  </LinearGradient>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </Animated.View>
-
-          {/* Record New Dream Form */}
-          <Animated.View style={[styles.dreamFormCard, { transform: [{ scale: scaleAnim }] }]}>
-            <View style={styles.dreamFormGradient}>
-              <View style={styles.dreamFormHeader}>
-                <Text style={styles.dreamFormTitle}>Record New Dream</Text>
-                <Text style={styles.dreamFormSubtitle}>Share your dream for spiritual insights</Text>
-              </View>
-              
-              <View style={styles.dreamForm}>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Dream Title *</Text>
-                  <TextInput
-                    style={[styles.input, dreamTitle.length > 0 && styles.inputFocused]}
-                    placeholder="Give your dream a memorable title..."
-                    placeholderTextColor="rgba(0, 0, 0, 0.6)"
-                    value={dreamTitle}
-                    onChangeText={setDreamTitle}
-                    maxLength={100}
-                    autoCorrect={false}
-                    autoCapitalize="words"
-                    blurOnSubmit={true}
-                    textContentType="none"
-                  />
-                  <Text style={styles.charCount}>{dreamTitle.length}/100</Text>
-                </View>
-
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Dream Description *</Text>
-                  <TextInput
-                    style={[styles.input, styles.textArea, dreamDescription.length > 0 && styles.inputFocused]}
-                    placeholder="Describe your dream in detail. Include people, places, emotions, and any significant events..."
-                    placeholderTextColor="rgba(0, 0, 0, 0.6)"
-                    value={dreamDescription}
-                    onChangeText={setDreamDescription}
-                    multiline
-                    numberOfLines={6}
-                    textAlignVertical="top"
-                    maxLength={1000}
-                    autoCorrect={false}
-                    autoCapitalize="sentences"
-                    blurOnSubmit={true}
-                    textContentType="none"
-                    scrollEnabled={true}
-                  />
-                  <Text style={styles.charCount}>{dreamDescription.length}/1000</Text>
-                </View>
-
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Dream Mood</Text>
-                  <View style={styles.modernMoodSelector}>
-                    {moods.map((mood) => (
-                      <TouchableOpacity
-                        key={mood.id}
-                        style={[
-                          styles.modernMoodOption,
-                          dreamMood === mood.id && styles.modernMoodOptionSelected
-                        ]}
-                        onPress={() => setDreamMood(mood.id as any)}
-                      >
-                        <Text style={styles.modernMoodOptionEmoji}>{mood.emoji}</Text>
-                        <Text style={[
-                          styles.modernMoodOptionText,
-                          dreamMood === mood.id && styles.modernMoodOptionTextSelected
-                        ]}>
-                          {mood.label}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
-
-                {isAnalyzing && (
-                  <View style={styles.analyzingProgress}>
-                    <LinearGradient
-                      colors={['#EEF2FF', '#E0E7FF']}
-                      style={styles.analyzingProgressCard}
-                    >
-                      <Animated.View style={[styles.analyzingIcon, { transform: [{ scale: pulseAnim }] }]}>
-                        <Sparkles size={24} color={Colors.primary[600]} />
-                      </Animated.View>
-                      <Text style={styles.analyzingTitle}>Analyzing Your Dream</Text>
-                      <Text style={styles.analyzingSubtitle}>
-                        Our AI is examining biblical symbols and spiritual meanings...
-                      </Text>
-                      <ActivityIndicator size="small" color={Colors.primary[600]} style={{ marginTop: 16 }} />
-                    </LinearGradient>
-                  </View>
-                )}
-
-                <TouchableOpacity
-                  style={[
-                    styles.saveButton,
-                    (!dreamTitle.trim() || !dreamDescription.trim()) && styles.saveButtonDisabled,
-                    isAnalyzing && styles.saveButtonAnalyzing,
-                    (!dreamTitle.trim() || !dreamDescription.trim()) ? null : styles.saveButtonGlow
-                  ]}
-                  onPress={handleAddDream}
-                  disabled={!dreamTitle.trim() || !dreamDescription.trim() || isAnalyzing}
-                >
-                  <LinearGradient
-                    colors={isAnalyzing
-                      ? ['#F59E0B', '#D97706']
-                      : (!dreamTitle.trim() || !dreamDescription.trim())
-                        ? ['rgba(156, 163, 175, 0.5)', 'rgba(156, 163, 175, 0.3)']
-                        : Colors.gradients.accent.primary
                     }
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 1 }}
@@ -1015,10 +828,16 @@ export default function DreamInterpretationScreen() {
                       {isAnalyzing ? (
                         <ActivityIndicator size="small" color="white" />
                       ) : (
-                        <Sparkles size={20} color="white" />
+                        <Sparkles size={20} color={(!dreamTitle.trim() || !dreamDescription.trim() || (!isSubscribed && adsWatchedCount < 2)) ? 'rgba(255, 255, 255, 0.5)' : 'white'} />
                       )}
-                      <Text style={styles.saveButtonText}>
-                        {isAnalyzing ? 'AI Analysis in Progress...' : 'Analyze Dream'}
+                      <Text style={[
+                        styles.saveButtonText,
+                        (!dreamTitle.trim() || !dreamDescription.trim()) && styles.saveButtonTextDisabled,
+                        (!isSubscribed && adsWatchedCount < 2) && styles.saveButtonTextDisabled,
+                      ]}>
+                        {isAnalyzing ? 'AI Analysis in Progress...' : 
+                          (isSubscribed || adsWatchedCount >= 2) ? 'Analyze with AI' : 'Unlock AI Analysis'
+                        }
                       </Text>
                     </View>
                   </LinearGradient>
@@ -1026,14 +845,14 @@ export default function DreamInterpretationScreen() {
               </View>
             </View>
           </Animated.View>
-
+          
           {/* Dreams List */}
           <View style={styles.dreamsSection}>
             <View style={styles.dreamsSectionHeader}>
               <Text style={styles.sectionTitle}>Your Dreams</Text>
               <TouchableOpacity
                 style={styles.refreshButton}
-                onPress={handleRefreshDreams}
+                onPress={() => loadDreams(true)}
                 disabled={loadingDreams}
                 activeOpacity={0.7}
               >
@@ -1074,19 +893,112 @@ export default function DreamInterpretationScreen() {
               </View>
             )}
           </View>
-
+          
           {/* Bottom spacing */}
           <View style={styles.bottomSpacing} />
         </Animated.ScrollView>
-
+        
         {/* Modals */}
         <DreamDetailModal />
       </BackgroundGradient>
     </KeyboardAvoidingView>
   );
-
 }
 
+const accessModalStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    width: '90%',
+    maxWidth: 400,
+    borderRadius: 24,
+    overflow: 'hidden',
+    elevation: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+  },
+  modalGradient: {
+    padding: 32,
+    alignItems: 'center',
+  },
+  modalHeader: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  modalTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: 'white',
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.9)',
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 20,
+  },
+  counterContainer: {
+    marginBottom: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 12,
+  },
+  counterText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: 'white',
+  },
+  counterNumber: {
+    fontWeight: '800',
+  },
+  watchAdButton: {
+    width: '100%',
+    paddingVertical: 16,
+    borderRadius: 16,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  watchAdButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '700',
+    marginLeft: 8,
+  },
+  divider: {
+    width: '80%',
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    marginBottom: 20,
+  },
+  upgradeButton: {
+    width: '100%',
+    paddingVertical: 16,
+    borderRadius: 16,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  upgradeButtonText: {
+    color: '#3B82F6',
+    fontSize: 16,
+    fontWeight: '700',
+    marginLeft: 8,
+  },
+  buttonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+});
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -2199,3 +2111,163 @@ const styles = StyleSheet.create({
   },
 
 });
+
+  // const NewDreamModal = () => ( // This component is removed
+  //   <Modal
+  //     visible={showNewDreamModal}
+  //     animationType="slide"
+  //     presentationStyle="pageSheet"
+  //     onRequestClose={handleModalClose}
+  //     transparent={false}
+  //     statusBarTranslucent={true}
+  //   >
+  //     <KeyboardAvoidingView
+  //       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+  //       style={styles.modalContainer}
+  //       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+  //     >
+  //       <LinearGradient
+  //         colors={Colors.gradients.etherealSunset as any}
+  //         style={styles.modalGradient}
+  //         start={{ x: 0, y: 0 }}
+  //         end={{ x: 1, y: 1 }}
+  //       >
+  //         <View style={styles.modalHeader}>
+  //           <TouchableOpacity onPress={handleModalClose}>
+  //             <ChevronLeft size={24} color="white" />
+  //           </TouchableOpacity>
+  //           <Text style={styles.modalTitle}>Record New Dream</Text>
+  //           <View style={{ width: 24 }} />
+  //         </View>
+          
+  //         <ScrollView 
+  //           style={styles.modalContent}
+  //           showsVerticalScrollIndicator={false}
+  //           keyboardShouldPersistTaps="handled"
+  //           nestedScrollEnabled={true}
+  //           bounces={false}
+  //         >
+  //           <View style={styles.dreamForm}>
+  //             <View style={styles.inputGroup}>
+  //               <Text style={styles.inputLabel}>Dream Title *</Text>
+  //               <TextInput
+  //                 style={[styles.input, dreamTitle.length > 0 && styles.inputFocused]}
+  //                 placeholder="Give your dream a memorable title..."
+  //                 placeholderTextColor="rgba(255, 255, 255, 0.6)"
+  //                 value={dreamTitle}
+  //                 onChangeText={setDreamTitle}
+  //                 maxLength={100}
+  //                 autoCorrect={false}
+  //                 autoCapitalize="words"
+  //                 blurOnSubmit={true}
+  //                 textContentType="none"
+  //               />
+  //               <Text style={styles.charCount}>{dreamTitle.length}/100</Text>
+  //             </View>
+
+  //             <View style={styles.inputGroup}>
+  //               <Text style={styles.inputLabel}>Dream Description *</Text>
+  //               <TextInput
+  //                 style={[styles.input, styles.textArea, dreamDescription.length > 0 && styles.inputFocused]}
+  //                 placeholder="Describe your dream in detail. Include people, places, emotions, and any significant events..."
+  //                 placeholderTextColor="rgba(255, 255, 255, 0.6)"
+  //                 value={dreamDescription}
+  //                 onChangeText={setDreamDescription}
+  //                 multiline
+  //                 numberOfLines={6}
+  //                 textAlignVertical="top"
+  //                 maxLength={1000}
+  //                 autoCorrect={false}
+  //                 autoCapitalize="sentences"
+  //                 blurOnSubmit={true}
+  //                 textContentType="none"
+  //                 scrollEnabled={true}
+  //               />
+  //               <Text style={styles.charCount}>{dreamDescription.length}/1000</Text>
+  //             </View>
+
+  //             <View style={styles.inputGroup}>
+  //               <Text style={styles.inputLabel}>Dream Mood</Text>
+  //               <View style={styles.moodSelector}>
+  //                 {moods.map((mood) => (
+  //                   <TouchableOpacity
+  //                     key={mood.id}
+  //                     style={[
+  //                       styles.moodOption,
+  //                       dreamMood === mood.id && [styles.selectedMoodOption, { backgroundColor: mood.color }]
+  //                     ]}
+  //                     onPress={() => setDreamMood(mood.id as any)}
+  //                   >
+  //                     <Text style={styles.moodOptionEmoji}>{mood.emoji}</Text>
+  //                     <Text style={[
+  //                       styles.moodOptionText,
+  //                       dreamMood === mood.id && styles.selectedMoodOptionText
+  //                     ]}>
+  //                       {mood.label}
+  //                     </Text>
+  //                   </TouchableOpacity>
+  //                 ))}
+  //               </View>
+  //             </View>
+
+  //             {isAnalyzing && (
+  //               <View style={styles.analyzingProgress}>
+  //                 <LinearGradient
+  //                   colors={['rgba(255, 255, 255, 0.2)', 'rgba(255, 255, 255, 0.1)']}
+  //                   style={styles.analyzingProgressCard}
+  //                 >
+  //                   <Animated.View style={[styles.analyzingIcon, { transform: [{ scale: pulseAnim }] }]}>
+  //                     <Sparkles size={24} color="white" />
+  //                   </Animated.View>
+  //                   <Text style={styles.analyzingTitle}>Analyzing Your Dream</Text>
+  //                   <Text style={styles.analyzingSubtitle}>
+  //                     Our AI is examining biblical symbols and spiritual meanings...
+  //                   </Text>
+  //                   <ActivityIndicator size="small" color="white" style={{ marginTop: 16 }} />
+  //                 </LinearGradient>
+  //               </View>
+  //             )}
+
+  //             <TouchableOpacity 
+  //               style={[
+  //                 styles.saveButton,
+  //                 (!dreamTitle.trim() || !dreamDescription.trim()) && styles.saveButtonDisabled,
+  //                 isAnalyzing && styles.saveButtonAnalyzing,
+  //                 (!dreamTitle.trim() || !dreamDescription.trim()) ? null : styles.saveButtonGlow
+  //               ]} 
+  //               onPress={handleAddDream}
+  //               disabled={!dreamTitle.trim() || !dreamDescription.trim() || isAnalyzing}
+  //             >
+  //               <LinearGradient
+  //                 colors={isAnalyzing 
+  //                   ? ['#F59E0B', '#D97706'] 
+  //                   : (!dreamTitle.trim() || !dreamDescription.trim()) 
+  //                     ? ['rgba(255, 255, 255, 0.1)', 'rgba(255, 255, 255, 0.05)']
+  //                     : ['#667eea', '#764ba2']
+  //               }
+  //               start={{ x: 0, y: 0 }}
+  //               end={{ x: 1, y: 1 }}
+  //               style={styles.saveButtonGradient}
+  //             >
+  //               <View style={styles.saveButtonContent}>
+  //                 {isAnalyzing ? (
+  //                   <ActivityIndicator size="small" color="white" />
+  //                 ) : (
+  //                   <Sparkles size={20} color={(!dreamTitle.trim() || !dreamDescription.trim()) ? 'rgba(255, 255, 255, 0.5)' : 'white'} />
+  //                 )}
+  //                 <Text style={[
+  //                   styles.saveButtonText,
+  //                   (!dreamTitle.trim() || !dreamDescription.trim()) && styles.saveButtonTextDisabled
+  //                 ]}>
+  //                   {isAnalyzing ? 'AI Analysis in Progress...' : 
+  //                     (!dreamTitle.trim() || !dreamDescription.trim()) ? 'Fill Required Fields' : 'Analyze with AI'
+  //                   }
+  //                 </Text>
+  //               </View>
+  //             </LinearGradient>
+  //           </View>
+  //         </ScrollView>
+  //       </LinearGradient>
+  //     </KeyboardAvoidingView>
+  //   </Modal>
+  // );

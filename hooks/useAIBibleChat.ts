@@ -1,13 +1,30 @@
-import { useState, useEffect } from 'react';
+// src/hooks/useAIBibleChat.js
+
+import { useState, useEffect, useRef } from 'react';
 import { Alert } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { db } from '@/lib/firebase';
+import {
+  collection,
+  addDoc,
+  query,
+  where,
+  getDocs,
+  doc,
+  updateDoc,
+  orderBy,
+  deleteDoc,
+  serverTimestamp,
+  limit,
+} from 'firebase/firestore';
+import { useAuth } from './useAuth'; // ⬅️ Assumes a useAuth hook exists
 import { cleanAIResponse } from '@/utils/textFormatting';
 
+// Re-defining interfaces for clarity
 export interface ChatMessage {
   id: string;
   text: string;
   isUser: boolean;
-  timestamp: Date;
+  timestamp: Date | { toDate: () => Date }; // Handles Firestore Timestamp
   category?: string;
 }
 
@@ -20,6 +37,7 @@ export interface ChatCategory {
 
 export interface Conversation {
   id: string;
+  userId: string;
   category: string;
   title: string;
   preview: string;
@@ -27,55 +45,16 @@ export interface Conversation {
   messages: ChatMessage[];
 }
 
-const CONVERSATIONS_STORAGE_KEY = 'ai_bible_conversations';
-
 export function useAIBibleChat() {
+  const { user } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [isTyping, setIsTyping] = useState(false);
+  const [isTyping, setIsTyping] = useState<boolean>(false);
   const [currentCategory, setCurrentCategory] = useState<string | null>(null);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Load conversations from storage on mount
-  useEffect(() => {
-    loadConversations();
-  }, []);
-
-  // Save conversations when they change
-  useEffect(() => {
-    saveConversations();
-  }, [conversations]);
-
-  const loadConversations = async () => {
-    try {
-      const stored = await AsyncStorage.getItem(CONVERSATIONS_STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        // Convert timestamp strings back to Date objects
-        const conversationsWithDates = parsed.map((conv: any) => ({
-          ...conv,
-          lastMessageTime: new Date(conv.lastMessageTime),
-          messages: conv.messages.map((msg: any) => ({
-            ...msg,
-            timestamp: new Date(msg.timestamp)
-          }))
-        }));
-        setConversations(conversationsWithDates);
-      }
-    } catch (error) {
-      console.error('Error loading conversations:', error);
-    }
-  };
-
-  const saveConversations = async () => {
-    try {
-      await AsyncStorage.setItem(CONVERSATIONS_STORAGE_KEY, JSON.stringify(conversations));
-    } catch (error) {
-      console.error('Error saving conversations:', error);
-    }
-  };
-
-  const chatCategories: ChatCategory[] = [
+  const chatCategories: ChatCategory[] = useRef([
     {
       id: 'bible-study',
       title: 'Bible Study',
@@ -136,82 +115,151 @@ export function useAIBibleChat() {
       subtitle: 'Open faith conversations',
       systemPrompt: 'You are a friendly Christian companion for open conversations about faith, life, and spiritual matters. Be encouraging, biblically sound, and ready to discuss any topic from a Christian perspective.'
     }
-  ];
+  ]).current;
 
-  const createNewConversation = (categoryId: string): Conversation => {
+  // Load conversations from Firestore on mount and when user changes
+  useEffect(() => {
+    const fetchConversations = async () => {
+      if (!user) {
+        setConversations([]);
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      try {
+        const q = query(
+          collection(db, 'ai_conversations'),
+          where('userId', '==', user.uid),
+          orderBy('lastMessageTime', 'desc')
+        );
+        const querySnapshot = await getDocs(q);
+        const fetchedConversations = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+          lastMessageTime: doc.data().lastMessageTime.toDate(),
+          messages: doc.data().messages.map((msg: any) => ({
+            ...msg,
+            timestamp: msg.timestamp.toDate(),
+          })),
+        })) as Conversation[];
+        setConversations(fetchedConversations);
+      } catch (error) {
+        console.error('Error fetching conversations:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchConversations();
+  }, [user]);
+
+  const createNewConversation = async (categoryId: string): Promise<string> => {
+    if (!user) {
+      throw new Error('User not authenticated.');
+    }
     const category = chatCategories.find(c => c.id === categoryId);
     const welcomeMessage: ChatMessage = {
-      id: Date.now().toString(),
+      id: `${Date.now()}`,
       text: `Hello! I'm here to help you with ${category?.title.toLowerCase()}. ${category?.subtitle} What would you like to discuss today?`,
       isUser: false,
       timestamp: new Date(),
       category: categoryId,
     };
-
-    return {
-      id: `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+  
+    const conversationData = {
+      userId: user.uid,
       category: categoryId,
       title: `${category?.title} Chat`,
       preview: welcomeMessage.text,
-      lastMessageTime: new Date(),
-      messages: [welcomeMessage],
+      lastMessageTime: serverTimestamp(),
+      messages: [{ 
+        ...welcomeMessage, 
+        timestamp: serverTimestamp() 
+      }],
     };
+  
+    try {
+      const docRef = await addDoc(collection(db, 'ai_conversations'), conversationData);
+      
+      const newConversation: Conversation = {
+        id: docRef.id,
+        ...conversationData,
+        lastMessageTime: new Date(),
+        messages: [{ ...welcomeMessage }],
+      } as Conversation;
+  
+      setConversations(prev => [newConversation, ...prev]);
+      setCurrentCategory(categoryId);
+      setCurrentConversationId(docRef.id);
+      setMessages(newConversation.messages);
+      
+      return docRef.id;
+    } catch (error) {
+      console.error('Error creating new conversation:', error);
+      throw error;
+    }
   };
 
-  const updateConversation = (conversationId: string, newMessages: ChatMessage[]) => {
-    setConversations(prev => prev.map(conv => {
-      if (conv.id === conversationId) {
-        const lastMessage = newMessages[newMessages.length - 1];
-        const firstUserMessage = newMessages.find(m => m.isUser);
-        return {
-          ...conv,
-          messages: newMessages,
-          preview: lastMessage.text.substring(0, 100) + (lastMessage.text.length > 100 ? '...' : ''),
-          lastMessageTime: lastMessage.timestamp,
-          title: firstUserMessage ? 
-            (firstUserMessage.text.substring(0, 50) + (firstUserMessage.text.length > 50 ? '...' : '')) : 
-            conv.title
-        };
-      }
-      return conv;
-    }));
+  const updateConversation = async (conversationId: string, newMessages: ChatMessage[]): Promise<void> => {
+    if (!user) return;
+    try {
+      const docRef = doc(db, 'ai_conversations', conversationId);
+      const lastMessage = newMessages[newMessages.length - 1];
+      const firstUserMessage = newMessages.find(m => m.isUser);
+      
+      await updateDoc(docRef, {
+        messages: newMessages.map(msg => ({
+          ...msg,
+          timestamp: new Date(msg.timestamp as any) // Convert Date object back to Firestore Timestamp
+        })),
+        preview: lastMessage.text.substring(0, 100) + (lastMessage.text.length > 100 ? '...' : ''),
+        lastMessageTime: new Date(lastMessage.timestamp as any),
+        title: firstUserMessage ? 
+          (firstUserMessage.text.substring(0, 50) + (firstUserMessage.text.length > 50 ? '...' : '')) : 
+          'New Chat',
+      });
+      
+      setConversations(prev => prev.map(conv => {
+        if (conv.id === conversationId) {
+          return {
+            ...conv,
+            messages: newMessages,
+            preview: lastMessage.text.substring(0, 100) + (lastMessage.text.length > 100 ? '...' : ''),
+            lastMessageTime: lastMessage.timestamp as Date,
+            title: firstUserMessage ? 
+              (firstUserMessage.text.substring(0, 50) + (firstUserMessage.text.length > 50 ? '...' : '')) : 
+              conv.title,
+          };
+        }
+        return conv;
+      }));
+    } catch (error) {
+      console.error('Error updating conversation:', error);
+    }
   };
 
   const sendMessage = async (userMessage: string, categoryId: string): Promise<void> => {
-    if (!userMessage.trim()) return;
+    if (!userMessage.trim() || !user || !currentConversationId) {
+      return;
+    }
 
-    // Add user message
-    const newUserMessage: ChatMessage = {
-      id: Date.now().toString(),
+    setIsTyping(true);
+
+    const userMsg: ChatMessage = {
+      id: `${Date.now()}`,
       text: userMessage.trim(),
       isUser: true,
       timestamp: new Date(),
       category: categoryId,
     };
 
-    const updatedMessages = [...messages, newUserMessage];
+    const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
-    
-    // Update conversation
-    if (currentConversationId) {
-      updateConversation(currentConversationId, updatedMessages);
-    }
-    
-    setIsTyping(true);
 
     try {
-      // Try Edge Function first, fallback to direct API
-      let aiResponse: string;
-      
-      try {
-        aiResponse = await getEdgeFunctionResponse(userMessage, categoryId);
-      } catch (edgeError) {
-        console.log('Edge function failed, trying direct API:', edgeError);
-        aiResponse = await getDeepSeekResponse(userMessage, categoryId);
-      }
-      
+      const aiResponse = await _fetchAIResponse(userMessage, categoryId, updatedMessages);
+
       const aiMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
+        id: `${Date.now() + 1}`,
         text: cleanAIResponse(aiResponse),
         isUser: false,
         timestamp: new Date(),
@@ -220,88 +268,43 @@ export function useAIBibleChat() {
 
       const finalMessages = [...updatedMessages, aiMessage];
       setMessages(finalMessages);
-      
-      // Update conversation with AI response
-      if (currentConversationId) {
-        updateConversation(currentConversationId, finalMessages);
-      }
+      await updateConversation(currentConversationId, finalMessages);
+
     } catch (error) {
       console.error('Error getting AI response:', error);
-      
-      // Fallback response
       const fallbackMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
+        id: `${Date.now() + 1}`,
         text: "I apologize, but I'm having trouble connecting to the AI service right now. Please try again in a moment. In the meantime, I encourage you to pray about your question and seek wisdom from God's Word.",
         isUser: false,
         timestamp: new Date(),
         category: categoryId,
       };
-
       const finalMessages = [...updatedMessages, fallbackMessage];
       setMessages(finalMessages);
-      
-      // Update conversation with fallback message
-      if (currentConversationId) {
-        updateConversation(currentConversationId, finalMessages);
-      }
-      
-      Alert.alert(
-        'Connection Issue',
-        'Unable to connect to the AI service. Please check your internet connection and try again.'
-      );
+      await updateConversation(currentConversationId, finalMessages);
+
+      Alert.alert('Connection Issue', 'Unable to connect to the AI service. Please check your internet connection and try again.');
     } finally {
       setIsTyping(false);
     }
   };
 
-  const getEdgeFunctionResponse = async (userMessage: string, categoryId: string): Promise<string> => {
-    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-    
-    if (!supabaseUrl || !supabaseKey) {
-      throw new Error('Supabase configuration missing');
-    }
-
-    const conversationHistory = messages
-      .filter(m => m.category === categoryId)
-      .slice(-10)
-      .map(m => ({
-        role: m.isUser ? 'user' : 'assistant',
-        content: m.text
-      }));
-
-    const response = await fetch(`${supabaseUrl}/functions/v1/ai-bible-chat`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${supabaseKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        message: userMessage,
-        category: categoryId,
-        conversationHistory,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('❌ Edge function error:', errorText);
-      throw new Error(`Edge function request failed: ${response.status}`);
-    }
-
-    const responseData = await response.json();
-    return cleanAIResponse(responseData.response);
-  };
-
-  const getDeepSeekResponse = async (userMessage: string, categoryId: string): Promise<string> => {
+  // ➡️ Helper function to handle AI API calls
+  const _fetchAIResponse = async (userMessage: string, categoryId: string, history: ChatMessage[]): Promise<string> => {
+    // This function remains the same as it interacts with the DeepSeek API, not Firebase.
+    // The only change is that it's a helper function and now part of this file.
+    // ... (rest of the API call logic)
     const DEEPSEEK_API_URL = 'https://api.deepseek.com/chat/completions';
-    const API_KEY = process.env.EXPO_PUBLIC_DEEPSEEK_API_KEY || 'sk-a65800223d43491a818e11c4f6d27dbb';
+    const API_KEY = process.env.EXPO_PUBLIC_DEEPSEEK_API_KEY; // Removed hardcoded fallback for security
+
+    if (!API_KEY) {
+      throw new Error('DeepSeek API key is not configured.');
+    }
 
     const category = chatCategories.find(c => c.id === categoryId);
     const systemPrompt = category?.systemPrompt || 'You are a helpful Christian AI assistant.';
 
-    const conversationHistory = messages
-      .filter(m => m.category === categoryId)
+    const conversationHistory = history
       .slice(-10) // Keep last 10 messages for context
       .map(m => ({
         role: m.isUser ? 'user' : 'assistant',
@@ -314,7 +317,6 @@ export function useAIBibleChat() {
         {
           role: 'system',
           content: `${systemPrompt}
-
 Guidelines:
 - Always provide biblically accurate information
 - Reference specific Bible verses when relevant
@@ -335,44 +337,45 @@ Guidelines:
       top_p: 0.9,
     };
 
-    console.log('🔍 Calling DeepSeek API for Bible chat...');
+    try {
+      const response = await fetch(DEEPSEEK_API_URL, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
 
-    const response = await fetch(DEEPSEEK_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('❌ DeepSeek API error:', errorText);
-      throw new Error(`DeepSeek API request failed: ${response.status}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ DeepSeek API error:', errorText);
+        throw new Error(`DeepSeek API request failed: ${response.status}`);
+      }
+      
+      const responseData = await response.json();
+      const content = responseData.choices?.[0]?.message?.content;
+      if (!content) {
+        throw new Error('No content received from DeepSeek API');
+      }
+      return cleanAIResponse(content);
+    } catch (error) {
+      console.error('Error fetching from DeepSeek:', error);
+      throw error;
     }
-
-    
-        const responseData = await response.json();
-        const content = responseData.choices?.[0]?.message?.content;
-    if (!content) {
-      throw new Error('No content received from DeepSeek API');
-    }
-
-    console.log('✅ DeepSeek response received for Bible chat');
-    return cleanAIResponse(content);
   };
 
-  const startNewConversation = (categoryId: string): string => {
-    const newConversation = createNewConversation(categoryId);
-    
-    setConversations(prev => [newConversation, ...prev]);
-    setCurrentCategory(categoryId);
-    setCurrentConversationId(newConversation.id);
-    setMessages(newConversation.messages);
-    
-    return newConversation.id;
-  };
+const startNewConversation = async (categoryId: string): Promise<string> => {
+  try {
+    const conversationId = await createNewConversation(categoryId);
+    return conversationId;
+  } catch (error) {
+    console.error('Failed to start new conversation:', error);
+    // You might want to throw the error or return a specific value
+    // to indicate failure, e.g., an empty string or null.
+    throw error;
+  }
+};
 
   const openExistingConversation = (conversationId: string) => {
     const conversation = conversations.find(c => c.id === conversationId);
@@ -389,23 +392,20 @@ Guidelines:
     setCurrentConversationId(null);
   };
 
-  const getConversationHistory = (categoryId: string) => {
-    return messages.filter(m => m.category === categoryId);
-  };
-
-  const getRecentConversations = (limit: number = 10): Conversation[] => {
-    return conversations
-      .sort((a, b) => b.lastMessageTime.getTime() - a.lastMessageTime.getTime())
-      .slice(0, limit);
-  };
-
   const deleteConversation = async (conversationId: string) => {
-    setConversations(prev => prev.filter(c => c.id !== conversationId));
-    
-    // If we're currently viewing this conversation, clear it
-    if (currentConversationId === conversationId) {
-      clearConversation();
+    try {
+      await deleteDoc(doc(db, 'ai_conversations', conversationId));
+      setConversations(prev => prev.filter(c => c.id !== conversationId));
+      if (currentConversationId === conversationId) {
+        clearConversation();
+      }
+    } catch (error) {
+      console.error('Error deleting conversation:', error);
     }
+  };
+  
+  const getRecentConversations = (limit: number = 10): Conversation[] => {
+    return [...conversations].sort((a, b) => b.lastMessageTime.getTime() - a.lastMessageTime.getTime()).slice(0, limit);
   };
 
   const formatTimeAgo = (date: Date): string => {
@@ -425,6 +425,7 @@ Guidelines:
   return {
     messages,
     conversations,
+    loading,
     isTyping,
     currentCategory,
     currentConversationId,
@@ -433,7 +434,6 @@ Guidelines:
     startNewConversation,
     openExistingConversation,
     clearConversation,
-    getConversationHistory,
     getRecentConversations,
     deleteConversation,
     formatTimeAgo,

@@ -1,78 +1,31 @@
-import { createClient } from '@supabase/supabase-js';
+// import { initializeApp, FirebaseApp } from 'firebase/app';
+// import { getFirestore, Firestore } from 'firebase/firestore';
+// import { getAuth } from 'firebase/auth';
 
-// Use your actual Supabase project credentials
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://rlzngxvmqcufzgxwdnyg.supabase.co';
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJsem5neHZtcWN1ZnpneHdkbnlnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM3ODAxODcsImV4cCI6MjA2OTM1NjE4N30.ZKX_MN09Y_GXiflzsOuX3d5Iw6XfRW-z0VHqRmukxlY';
+// // Your web app's Firebase configuration
+// const firebaseConfig = {
+//   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
+//   authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
+//   projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+//   storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
+//   messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+//   appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID
+// };
 
-console.log('🔴 Supabase configuration:', { 
-  url: supabaseUrl, 
-  hasKey: !!supabaseAnonKey,
-  keyLength: supabaseAnonKey?.length 
-});
+// // Initialize Firebase
+// const app = initializeApp(firebaseConfig);
+// const db = getFirestore(app);
+// const auth = getAuth(app);
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: false,
-    storage: undefined, // Let Supabase handle storage automatically
-    storageKey: 'supabase.auth.token',
-    flowType: 'pkce'
-  },
-  global: {
-    headers: {
-      'X-Client-Info': 'daily-bread-app',
-      'apikey': supabaseAnonKey, // Add API key to headers for better compatibility
-    }
-  }
-});
+// console.log('🟢 Firebase configuration:', { 
+//   projectId: firebaseConfig.projectId,
+//   initialized: !!db
+// });
 
-// Helper function to create a Supabase client with Firebase auth headers
-export const createFirebaseSupabaseClient = (firebaseUser: any) => {
-  // Convert Firebase UID to UUID format to match the database user_id
-  const firebaseIdToUUID = (firebaseId: string): string => {
-    let hash = 0;
-    for (let i = 0; i < firebaseId.length; i++) {
-      const char = firebaseId.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    
-    const hashStr = Math.abs(hash).toString(16).padStart(8, '0');
-    const part1 = hashStr.substring(0, 8);
-    const part2 = hashStr.substring(8, 12) || '0000';
-    const part3 = '4' + (hashStr.substring(12, 15) || '000');
-    const part4 = '8' + (hashStr.substring(15, 18) || '000');
-    const part5 = hashStr.substring(18, 30) || '000000000000';
-    const paddedPart5 = part5.padEnd(12, '0');
-    
-    return `${part1}-${part2}-${part3}-${part4}-${paddedPart5}`;
-  };
+// export { app, db, auth };
 
-  const convertedUserId = firebaseUser?.uid ? firebaseIdToUUID(firebaseUser.uid) : '';
-  
-  return createClient(supabaseUrl, supabaseAnonKey, {
-    auth: {
-      autoRefreshToken: true,
-      persistSession: true,
-      detectSessionInUrl: false,
-      storage: undefined,
-      storageKey: 'supabase.auth.token',
-      flowType: 'pkce'
-    },
-    global: {
-      headers: {
-        'X-Client-Info': 'daily-bread-app',
-        'apikey': supabaseAnonKey,
-        'Authorization': `Bearer ${supabaseAnonKey}`,
-        'X-User-ID': convertedUserId,
-        'X-User-Email': firebaseUser?.email || '',
-      }
-    }
-  });
-};
-
-// Database types
+// Database types... (rest of your file)
+// Database types - No changes needed as they are standard TypeScript
 export interface Profile {
   id: string;
   full_name: string | null;

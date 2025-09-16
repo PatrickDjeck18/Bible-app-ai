@@ -1,79 +1,108 @@
-import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
-import type { BibleVerse, Devotional } from '@/lib/supabase';
+import { useEffect, useState, useCallback } from 'react';
+import { db } from '@/lib/firebase';
+import {
+  collection,
+  doc,
+  query,
+  where,
+  getDocs,
+  updateDoc,
+  increment,
+  limit,
+} from 'firebase/firestore';
+
+// Define the data types for Firestore documents
+export interface BibleVerse {
+  id: string;
+  verse: string;
+  reference: string;
+  is_daily_verse: boolean;
+  date_featured: string;
+}
+
+export interface Devotional {
+  id: string;
+  title: string;
+  content: string;
+  views: number;
+  likes: number;
+  is_featured: boolean;
+  featured_date: string;
+}
 
 export function useContent() {
   const [dailyVerse, setDailyVerse] = useState<BibleVerse | null>(null);
   const [featuredDevotional, setFeaturedDevotional] = useState<Devotional | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchContent();
-  }, []);
-
-  const fetchContent = async () => {
+  const fetchContent = useCallback(async () => {
     try {
-      // Fetch daily verse
-      const { data: verseData, error: verseError } = await supabase
-        .from('bible_verses')
-        .select('*')
-        .eq('is_daily_verse', true)
-        .eq('date_featured', new Date().toISOString().split('T')[0])
-        .maybeSingle();
+      setLoading(true);
+      const today = new Date().toISOString().split('T')[0];
 
-      if (verseError && verseError.code !== 'PGRST116') {
-        console.error('Error fetching daily verse:', verseError);
-      } else if (verseData) {
-        setDailyVerse(verseData);
+      // Fetch daily verse
+      const verseQuery = query(
+        collection(db, 'bible_verses'),
+        where('is_daily_verse', '==', true),
+        where('date_featured', '==', today),
+        limit(1)
+      );
+
+      const verseSnapshot = await getDocs(verseQuery);
+      if (!verseSnapshot.empty) {
+        const verseDoc = verseSnapshot.docs[0];
+        setDailyVerse({ ...verseDoc.data(), id: verseDoc.id } as BibleVerse);
+      } else {
+        setDailyVerse(null);
       }
 
       // Fetch featured devotional
-      const { data: devotionalData, error: devotionalError } = await supabase
-        .from('devotionals')
-        .select('*')
-        .eq('is_featured', true)
-        .eq('featured_date', new Date().toISOString().split('T')[0])
-        .maybeSingle();
+      const devotionalQuery = query(
+        collection(db, 'devotionals'),
+        where('is_featured', '==', true),
+        where('featured_date', '==', today),
+        limit(1)
+      );
 
-      if (devotionalError && devotionalError.code !== 'PGRST116') {
-        console.error('Error fetching devotional:', devotionalError);
-      } else if (devotionalData) {
-        setFeaturedDevotional(devotionalData);
+      const devotionalSnapshot = await getDocs(devotionalQuery);
+      if (!devotionalSnapshot.empty) {
+        const devotionalDoc = devotionalSnapshot.docs[0];
+        setFeaturedDevotional({ ...devotionalDoc.data(), id: devotionalDoc.id } as Devotional);
+      } else {
+        setFeaturedDevotional(null);
       }
     } catch (error) {
       console.error('Error fetching content:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const incrementDevotionalViews = async (devotionalId: string) => {
+  useEffect(() => {
+    fetchContent();
+  }, [fetchContent]);
+
+  const incrementDevotionalViews = useCallback(async (devotionalId: string) => {
     try {
-      const { error } = await supabase.rpc('increment_devotional_views', {
-        devotional_id: devotionalId
+      const devotionalRef = doc(db, 'devotionals', devotionalId);
+      await updateDoc(devotionalRef, {
+        views: increment(1),
       });
-
-      if (error) {
-        console.error('Error incrementing views:', error);
-      }
     } catch (error) {
       console.error('Error incrementing views:', error);
     }
-  };
+  }, []);
 
-  const incrementDevotionalLikes = async (devotionalId: string) => {
+  const incrementDevotionalLikes = useCallback(async (devotionalId: string) => {
     try {
-      const { error } = await supabase.rpc('increment_devotional_likes', {
-        devotional_id: devotionalId
+      const devotionalRef = doc(db, 'devotionals', devotionalId);
+      await updateDoc(devotionalRef, {
+        likes: increment(1),
       });
-
-      if (error) {
-        console.error('Error incrementing likes:', error);
-      }
     } catch (error) {
       console.error('Error incrementing likes:', error);
     }
-  };
+  }, []);
 
   return {
     dailyVerse,
